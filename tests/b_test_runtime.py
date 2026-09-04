@@ -14,8 +14,22 @@ from porchlight.clock import FrozenClock
 from porchlight.config import Settings, reset_settings
 from porchlight.context import AppContext, NullChannel
 from porchlight.models import AidRequest, Category, DecisionKind, Source
-from porchlight.runtime import ACTIONS, app, dispatch, porchlight_entrypoint, runtime_settings
-from porchlight.telemetry import console_enabled, otlp_enabled, setup_telemetry
+from porchlight.runtime import (
+    ACTIONS,
+    app,
+    dispatch,
+    porchlight_entrypoint,
+    request_id_from_session,
+    runtime_settings,
+    session_id_of,
+)
+from porchlight.telemetry import (
+    console_enabled,
+    installed_tracer_provider,
+    otlp_enabled,
+    reset_telemetry,
+    setup_telemetry,
+)
 from porchlight.testing.mock_model import MockTurn, ScenarioModel
 
 FROZEN_NOW = datetime(2026, 9, 8, 14, 0, 0, tzinfo=UTC)
@@ -211,3 +225,109 @@ def test_telemetry_flags_read_the_environment(monkeypatch: pytest.MonkeyPatch) -
     assert otlp_enabled() is True
     monkeypatch.setenv("PORCHLIGHT_TRACE_CONSOLE", "1")
     assert console_enabled() is True
+
+
+# --- the AgentCore session id -------------------------------------------------------------
+
+
+class _Context:
+    """Stands in for AgentCore's ``RequestContext``, which only ever gives us a session id."""
+
+    def __init__(self, session_id: str | None) -> None:
+        self.session_id = session_id
+
+
+def test_entrypoint_takes_a_parameter_named_context() -> None:
+    """``BedrockAgentCoreApp`` passes the context only when the second parameter is so named."""
+    import inspect
+
+    assert list(inspect.signature(porchlight_entrypoint).parameters) == ["payload", "context"]
+    assert app._takes_context(porchlight_entrypoint) is True
+
+
+def test_session_id_of_reads_the_context() -> None:
+    assert session_id_of(_Context("sess-" + "a" * 30)) == "sess-" + "a" * 30
+    assert session_id_of(_Context("")) is None
+    assert session_id_of(_Context(None)) is None
+    assert session_id_of(None) is None
+    assert session_id_of(object()) is None
+
+
+def test_request_id_round_trips_through_a_runtime_session_id() -> None:
+    """What the API encodes in ``runtimeSessionId``, the runtime can decode again."""
+    from porchlight.orchestrator import runtime_session_id
+
+    assert request_id_from_session(runtime_session_id("req_9c72e440ff")) == "req_9c72e440ff"
+    assert request_id_from_session("sweep-2026-09-08-" + "x" * 20) is None
+    assert request_id_from_session("req_") is None
+    assert request_id_from_session(None) is None
+
+
+def test_dispatch_echoes_the_session_id(rctx: AppContext) -> None:
+    result = dispatch(rctx, {"action": "sweep"}, "sweep-2026-09-08-" + "x" * 20)
+    assert result["session_id"] == "sweep-2026-09-08-" + "x" * 20
+
+
+def test_dispatch_falls_back_to_the_session_id_for_the_request(
+    rctx: AppContext, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A payload with no ``request_id`` still works when the session id carries one."""
+    from porchlight.orchestrator import runtime_session_id
+
+    _scenario(monkeypatch)
+    request = AidRequest(raw_text="Ride to dialysis Thursday", source=Source.SMS)
+    rctx.store.put_request(request)
+
+    result = dispatch(rctx, {"action": "process_request"}, runtime_session_id(request.id))
+
+    assert result["ok"] is True
+    assert result["outcome"]["request_id"] == request.id
+
+
+def test_entrypoint_passes_the_context_through(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("PORCHLIGHT_MODEL_PROVIDER", "mock")
+    monkeypatch.setenv("PORCHLIGHT_SQLITE_PATH", str(tmp_path / "porchlight.db"))
+    monkeypatch.setenv("PORCHLIGHT_SESSION_DIR", str(tmp_path / "sessions"))
+    reset_settings()
+    _scenario(monkeypatch)
+
+    result = porchlight_entrypoint({"action": "sweep"}, _Context("sweep-" + "y" * 30))
+
+    assert result["session_id"] == "sweep-" + "y" * 30
+
+
+# --- telemetry ----------------------------------------------------------------------------
+
+
+def test_telemetry_is_configured_once(settings: Settings, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A long-lived runtime calls this per invocation; it must not stack span processors."""
+    monkeypatch.setenv("PORCHLIGHT_TRACE_CONSOLE", "1")
+    reset_telemetry()
+    try:
+        first = setup_telemetry(settings)
+        assert first is not None
+        assert setup_telemetry(settings) is first
+    finally:
+        reset_telemetry()
+
+
+def test_telemetry_reuses_an_installed_tracer_provider(
+    settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Under ``opentelemetry-instrument`` ADOT owns the provider; we attach, never replace."""
+    from opentelemetry import trace
+    from opentelemetry.sdk.trace import TracerProvider
+
+    provider = TracerProvider()
+    monkeypatch.setattr(trace, "get_tracer_provider", lambda: provider)
+    monkeypatch.setenv("AGENT_OBSERVABILITY_ENABLED", "true")
+    monkeypatch.delenv("PORCHLIGHT_TRACE_CONSOLE", raising=False)
+    reset_telemetry()
+    try:
+        assert installed_tracer_provider() is provider
+        telemetry = setup_telemetry(settings)
+        assert telemetry is not None
+        assert telemetry.tracer_provider is provider
+        assert not provider._active_span_processor._span_processors
+    finally:
+        reset_telemetry()

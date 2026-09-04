@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 import threading
+from collections.abc import Callable
 from datetime import UTC, date, datetime, time, timedelta
 from pathlib import Path
 from typing import Any, TypeVar
@@ -12,6 +14,7 @@ from pydantic import BaseModel
 
 from ..models import (
     AidRequest,
+    Attempt,
     Decision,
     DecisionStatus,
     GroupSettings,
@@ -22,6 +25,7 @@ from ..models import (
     RequestStatus,
     Volunteer,
 )
+from .base import StaleVersionError, apply_fields, trace_row
 
 M = TypeVar("M", bound=BaseModel)
 
@@ -50,6 +54,7 @@ CREATE TABLE IF NOT EXISTS requests (
     requester_id TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
+    version INTEGER NOT NULL DEFAULT 0,
     body TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_requests_status ON requests(status);
@@ -89,13 +94,32 @@ CREATE TABLE IF NOT EXISTS log (
 CREATE INDEX IF NOT EXISTS idx_log_request_id ON log(request_id);
 CREATE INDEX IF NOT EXISTS idx_log_created_at ON log(created_at);
 
+CREATE TABLE IF NOT EXISTS trace (
+    cursor INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts TEXT NOT NULL,
+    request_id TEXT,
+    expires_at INTEGER NOT NULL DEFAULT 0,
+    body TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_trace_request_id ON trace(request_id);
+CREATE INDEX IF NOT EXISTS idx_trace_expires_at ON trace(expires_at);
+
 CREATE TABLE IF NOT EXISTS group_settings (
     id TEXT PRIMARY KEY,
     body TEXT NOT NULL
 );
 """
 
-_TABLES = ("volunteers", "requesters", "requests", "decisions", "messages", "log", "group_settings")
+_TABLES = (
+    "volunteers",
+    "requesters",
+    "requests",
+    "decisions",
+    "messages",
+    "log",
+    "trace",
+    "group_settings",
+)
 
 
 def _iso(value: datetime | None) -> str | None:
@@ -126,9 +150,16 @@ class SqliteStore:
             self._conn.execute("PRAGMA synchronous=NORMAL")
             self._conn.execute("PRAGMA foreign_keys=ON")
             self._conn.executescript(_SCHEMA)
+            self._migrate()
             self._conn.commit()
 
     # --- plumbing -----------------------------------------------------------
+
+    def _migrate(self) -> None:
+        """Bring an older database file up to the current schema (caller holds the lock)."""
+        columns = {row["name"] for row in self._conn.execute("PRAGMA table_info(requests)")}
+        if "version" not in columns:
+            self._conn.execute("ALTER TABLE requests ADD COLUMN version INTEGER NOT NULL DEFAULT 0")
 
     def close(self) -> None:
         """Close the underlying connection."""
@@ -211,18 +242,7 @@ class SqliteStore:
 
     def put_request(self, req: AidRequest) -> AidRequest:
         """Insert or replace an aid request and return it."""
-        self._write(
-            "INSERT OR REPLACE INTO requests (id, status, requester_id, created_at, updated_at, body)"
-            " VALUES (?, ?, ?, ?, ?, ?)",
-            (
-                req.id,
-                str(req.status),
-                req.requester_id,
-                _iso(req.created_at),
-                _iso(req.updated_at),
-                req.model_dump_json(),
-            ),
-        )
+        self._write(_UPSERT_REQUEST, _request_row(req))
         return req
 
     def get_request(self, id: str) -> AidRequest | None:
@@ -249,6 +269,58 @@ class SqliteStore:
             for req in self._load(AidRequest, rows)
             if req.assigned_volunteer_id == volunteer_id or volunteer_id in req.attempted_volunteer_ids()
         ]
+
+    def update_request_fields(
+        self, request_id: str, *, expected_version: int | None = None, **fields: Any
+    ) -> AidRequest | None:
+        """Atomically write a few fields of one request (see :class:`.base.Store`).
+
+        The whole read-modify-write happens under the store lock and commits with a single
+        ``UPDATE ... WHERE id = ? AND version = ?``, so two threads updating different fields of
+        the same request can never lose one another's work.
+        """
+        with self._lock:
+            return self._mutate(request_id, lambda req: apply_fields(req, fields), expected_version)
+
+    def append_attempt(self, request_id: str, attempt: Attempt) -> AidRequest | None:
+        """Atomically append one outreach attempt (see :class:`.base.Store`)."""
+        with self._lock:
+            return self._mutate(request_id, lambda req: _with_attempts(req, [*req.attempts, attempt]))
+
+    def resolve_attempt(self, request_id: str, attempt: Attempt) -> AidRequest | None:
+        """Settle this volunteer's open attempt, or append it (see :class:`.base.Store`)."""
+        with self._lock:
+            return self._mutate(request_id, lambda req: _with_attempts(req, _settled(req, attempt)))
+
+    def _mutate(
+        self,
+        request_id: str,
+        change: Callable[[AidRequest], AidRequest],
+        expected_version: int | None = None,
+    ) -> AidRequest | None:
+        """Apply ``change`` to one stored request and write it back conditionally.
+
+        The caller must already hold ``self._lock``.
+        """
+        rows = list(self._conn.execute("SELECT body, version FROM requests WHERE id = ?", (request_id,)))
+        if not rows:
+            return None
+        current = AidRequest.model_validate_json(rows[0]["body"])
+        stored_version = int(rows[0]["version"] if rows[0]["version"] is not None else current.version)
+        if expected_version is not None and expected_version != stored_version:
+            raise StaleVersionError(request_id, expected_version, stored_version)
+        updated = change(current)
+        updated.version = stored_version + 1
+        _id, *columns = _request_row(updated)
+        cursor = self._conn.execute(
+            "UPDATE requests SET status = ?, requester_id = ?, created_at = ?, updated_at = ?,"
+            " version = ?, body = ? WHERE id = ? AND version = ?",
+            (*columns, request_id, stored_version),
+        )
+        if cursor.rowcount == 0:  # pragma: no cover - the lock makes this unreachable in-process
+            raise StaleVersionError(request_id, stored_version, None)
+        self._conn.commit()
+        return updated
 
     # --- decisions ----------------------------------------------------------
 
@@ -351,6 +423,41 @@ class SqliteStore:
         )
         return self._load(LogEvent, rows)
 
+    # --- trace --------------------------------------------------------------
+
+    def append_trace(self, event: dict[str, Any]) -> int:
+        """Persist one trace event and return its cursor (see :class:`.base.Store`)."""
+        row = trace_row(event, datetime.now(UTC))
+        request_id = row.get("request_id")
+        with self._lock:
+            cursor = self._conn.execute(
+                "INSERT INTO trace (ts, request_id, expires_at, body) VALUES (?, ?, ?, ?)",
+                (
+                    str(row["ts"]),
+                    request_id if isinstance(request_id, str) else None,
+                    int(row["expires_at"]),
+                    json.dumps(row),
+                ),
+            )
+            self._conn.commit()
+            return int(cursor.lastrowid or 0)
+
+    def list_trace(
+        self, since_cursor: int = 0, limit: int = 500, request_id: str | None = None
+    ) -> list[dict[str, Any]]:
+        """Read trace events after ``since_cursor``, oldest first (see :class:`.base.Store`)."""
+        clauses = ["cursor > ?"]
+        params: list[Any] = [int(since_cursor)]
+        if request_id is not None:
+            clauses.append("request_id = ?")
+            params.append(request_id)
+        params.append(max(0, int(limit)))
+        rows = self._rows(
+            f"SELECT cursor, body FROM trace WHERE {' AND '.join(clauses)} ORDER BY cursor ASC LIMIT ?",
+            tuple(params),
+        )
+        return [{**json.loads(row["body"]), "cursor": int(row["cursor"])} for row in rows]
+
     # --- settings -----------------------------------------------------------
 
     def get_group_settings(self) -> GroupSettings:
@@ -420,3 +527,39 @@ class SqliteStore:
 
     def __repr__(self) -> str:
         return f"SqliteStore(path={self.path!r})"
+
+
+_UPSERT_REQUEST = (
+    "INSERT OR REPLACE INTO requests (id, status, requester_id, created_at, updated_at, version, body)"
+    " VALUES (?, ?, ?, ?, ?, ?, ?)"
+)
+
+
+def _request_row(req: AidRequest) -> tuple[Any, ...]:
+    """The indexed columns plus the JSON body for one request."""
+    return (
+        req.id,
+        str(req.status),
+        req.requester_id,
+        _iso(req.created_at),
+        _iso(req.updated_at),
+        int(req.version),
+        req.model_dump_json(),
+    )
+
+
+def _with_attempts(req: AidRequest, attempts: list[Attempt]) -> AidRequest:
+    """A copy of ``req`` carrying exactly ``attempts``, with nothing else touched."""
+    return req.model_copy(update={"attempts": list(attempts)})
+
+
+def _settled(req: AidRequest, attempt: Attempt) -> list[Attempt]:
+    """``req.attempts`` with this volunteer's open attempt settled, or ``attempt`` appended."""
+    attempts = list(req.attempts)
+    for index in range(len(attempts) - 1, -1, -1):
+        candidate = attempts[index]
+        if candidate.volunteer_id == attempt.volunteer_id and candidate.outcome == "pending":
+            attempts[index] = candidate.model_copy(update={"outcome": attempt.outcome, "note": attempt.note})
+            return attempts
+    attempts.append(attempt)
+    return attempts

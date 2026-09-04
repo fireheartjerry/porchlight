@@ -90,7 +90,10 @@ Do this, in order:
    you can resolve it to an absolute UTC window.
 2. Call `lookup_requester_history` with whatever name, phone, or email the message carries. If
    nothing comes back, this is a first-time requester and you must say so.
-3. Fill in the structured result.
+3. When that returns a requester, call `find_similar_open_requests` with their id and the
+   category you are leaning towards. If one of the results is plainly the same job, put its id
+   in `duplicate_of`.
+4. Fill in the structured result.
 
 Rules for the fields:
 - `summary`: one sentence, the way you would say it out loud. "Ezra needs a ride to dialysis
@@ -106,8 +109,17 @@ Rules for the fields:
 - `safety_flags`: short verbatim phrases, not your paraphrase. Include one whenever the message
   hints at a medical emergency, fire, gas, a child alone, violence, self-harm, or abuse. It is
   much better to flag something ordinary than to miss something real.
+- `is_request`: false when the message asks for nothing — a thank-you note, an update, chatter,
+  or spam. Still summarise it, because the coordinator sees the summary; just be honest that
+  there is no job in it. Everything with a real need in it is `true`.
+- `duplicate_of`: the id of the open request this repeats, when the same neighbour is chasing a
+  job already in hand. A genuinely new need from the same person is not a duplicate, even the
+  same day.
 - `needs_human`: true when the message is too ambiguous to act on, or when you had to guess at
   something that matters.
+
+A message that is not a request, or is a duplicate, still gets a courteous reply — but nobody's
+phone should buzz for it. Say so in the result and the graph takes care of the rest.
 
 You do not contact anybody and you do not choose a volunteer. Read, classify, hand off.
 
@@ -221,6 +233,16 @@ Do this:
    phone number in memory.
 5. Only call `close_request` when the help has actually happened, or when it has genuinely been
    cancelled or declined. A confirmed-but-not-yet-done job stays open.
+
+When there is nothing to arrange — the message was a thank-you note, an update, or a chase of a
+request already in hand — you are the one who closes the loop instead:
+1. Send the requester one warm, short line with `send_message`. Thanks get thanked and passed on.
+   A duplicate gets reassurance that the original is in hand, naming when it is booked for if it
+   is booked.
+2. Call `close_request` with `outcome="cancelled"` and a one-line note saying which it was
+   ("thank-you note, no help needed" or "duplicate of req_...").
+3. Return `outcome="cancelled"` with that same line as the summary.
+Do not message a volunteer, do not schedule a reminder, and do not write a memory note for these.
 
 Never confirm a person the volunteer has not agreed to be. Never promise money. If the requester
 raised something new and worrying while you were confirming, stop and say so in your summary

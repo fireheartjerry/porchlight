@@ -52,6 +52,7 @@ from porchlight.sim.fixtures import SAMPLE_MESSAGES, demo_sequence, seed_store
 from .events import EventBus
 from .schemas import (
     BriefResponse,
+    EventsPage,
     HealthResponse,
     InboxIn,
     PorchResponse,
@@ -62,6 +63,7 @@ from .schemas import (
     RunDayIn,
     RunDayStarted,
     SampleMessage,
+    TraceEvent,
     VolunteerLoad,
     VolunteerView,
 )
@@ -74,6 +76,12 @@ SETTLED_STATUSES = (RequestStatus.CONFIRMED, RequestStatus.IN_PROGRESS, RequestS
 MAX_REPLAY = 200
 """Cap on how many past trace events a new SSE client may replay."""
 
+TAIL_INTERVAL = 1.0
+"""Seconds between polls of the persisted trace when ``events_source="store"``."""
+
+TAIL_BATCH = 200
+"""How many persisted trace events one tail pass reads."""
+
 ContextFactory = Callable[[], AppContext]
 OrchestratorFactory = Callable[[AppContext], Orchestrator]
 
@@ -83,12 +91,21 @@ OrchestratorFactory = Callable[[AppContext], Orchestrator]
 # --------------------------------------------------------------------------------------
 
 
-def attach_bus(ctx: AppContext, bus: EventBus) -> None:
-    """Route ``ctx.emit`` into ``bus`` while preserving any existing sink."""
+def attach_bus(ctx: AppContext, bus: EventBus, *, direct: bool = True) -> None:
+    """Route ``ctx.emit`` into ``bus`` while preserving any existing sink.
+
+    Args:
+        ctx: The context whose ``emit`` is being wrapped.
+        bus: The fan-out bus behind ``/api/events``.
+        direct: Publish straight to the bus. Set ``False`` when
+            ``settings.events_source == "store"``: the store tailer is then the only publisher,
+            so an event this process emits is not delivered twice.
+    """
     inner = ctx.emit
 
     def emit(event: dict[str, Any]) -> None:
-        bus.publish(event)
+        if direct:
+            bus.publish(event)
         try:
             inner(event)
         except Exception:  # pragma: no cover - a broken sink must not break a run
@@ -116,7 +133,8 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     context_factory: ContextFactory | None = app.state.context_factory
     owns_context = context_factory is None
     ctx = context_factory() if context_factory else build_context()
-    attach_bus(ctx, bus)
+    from_store = ctx.settings.events_source == "store"
+    attach_bus(ctx, bus, direct=not from_store)
     seed_if_empty(ctx)
 
     orchestrator_factory: OrchestratorFactory | None = app.state.orchestrator_factory
@@ -125,13 +143,20 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.ctx = ctx
     app.state.orchestrator = orchestrator
     app.state.day_task = None
-    logger.info("porchlight api ready (%s, %s)", ctx.settings.mode, orchestrator)
+    app.state.tail_task = asyncio.create_task(tail_trace(app)) if from_store else None
+    logger.info(
+        "porchlight api ready (%s, %s, events=%s)",
+        ctx.settings.mode,
+        orchestrator,
+        ctx.settings.events_source,
+    )
     try:
         yield
     finally:
-        task = app.state.day_task
-        if task is not None and not task.done():
-            task.cancel()
+        for name in ("day_task", "tail_task"):
+            task = getattr(app.state, name, None)
+            if task is not None and not task.done():
+                task.cancel()
         close = getattr(ctx.store, "close", None)
         if owns_context and callable(close):
             close()
@@ -238,6 +263,52 @@ async def _run(orchestrator_call: Callable[[], Any]) -> Any:
         return await run_in_threadpool(orchestrator_call)
     except GraphUnavailableError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+# --------------------------------------------------------------------------------------
+# Persisted trace
+# --------------------------------------------------------------------------------------
+
+
+def read_trace(
+    ctx: AppContext, since: int, limit: int, request_id: str | None = None
+) -> list[dict[str, Any]]:
+    """Read persisted trace events, returning ``[]`` rather than raising on a store failure."""
+    try:
+        return list(ctx.store.list_trace(since, limit, request_id))
+    except Exception:  # pragma: no cover - a store hiccup must not 500 the porch
+        logger.exception("failed to read the persisted trace")
+        return []
+
+
+def cursor_of(events: list[dict[str, Any]], fallback: int) -> int:
+    """The highest cursor in a page of trace events."""
+    return max((int(event.get("cursor") or 0) for event in events), default=fallback)
+
+
+async def tail_trace(app: FastAPI, interval: float = TAIL_INTERVAL) -> None:
+    """Publish newly persisted trace events onto the bus, once a second.
+
+    This is what makes the live trace work in a split deployment: the agents run on AgentCore
+    Runtime and write their trace to the shared store, and this task — running in the API
+    process, which never sees those ``ctx.emit`` calls — turns them back into an SSE stream.
+
+    The backlog already in the store when the task starts is walked but not published, so a
+    fresh client sees the day from here on rather than a replay of everything.
+    """
+    ctx: AppContext = app.state.ctx
+    bus: EventBus = app.state.bus
+    cursor = 0
+    live = False
+    while True:
+        events = await run_in_threadpool(read_trace, ctx, cursor, TAIL_BATCH)
+        cursor = cursor_of(events, cursor)
+        if live:
+            for event in events:
+                bus.publish(event)
+        if len(events) < TAIL_BATCH:
+            live = True
+            await asyncio.sleep(interval)
 
 
 # --------------------------------------------------------------------------------------
@@ -463,6 +534,26 @@ def create_app(
         return _ctx(request).store.list_log(request_id=request_id, limit=limit, since=_parse_since(since))
 
     # --- events ---------------------------------------------------------------
+    @app.get("/api/events/poll", response_model=EventsPage, tags=["trace"])
+    async def poll_events(
+        request: Request,
+        since: int = Query(default=0, ge=0, description="Cursor from the previous poll"),
+        limit: int = Query(default=200, ge=1, le=1000),
+        request_id: str | None = None,
+    ) -> EventsPage:
+        """Read persisted trace events after ``since``, oldest first.
+
+        The polling twin of ``/api/events``, for clients that cannot hold an SSE connection open
+        — a browser behind a buffering proxy, or an API Gateway deployment with a response
+        timeout. Poll with the ``cursor`` from the previous response.
+        """
+        ctx = _ctx(request)
+        events = await run_in_threadpool(read_trace, ctx, since, limit, request_id)
+        return EventsPage(
+            events=[TraceEvent.model_validate(event) for event in events],
+            cursor=cursor_of(events, since),
+        )
+
     @app.get("/api/events", tags=["trace"])
     async def events(
         request: Request,

@@ -27,7 +27,8 @@ class EmailChannel:
 
     Args:
         ses_client_factory: Returns a boto3 SES client; defaults to a lazily created one.
-        from_addr: Verified sender address; defaults to ``$PORCHLIGHT_FROM_ADDR``.
+        from_addr: Verified sender address. :func:`porchlight.channels.make_channel` passes
+            ``settings.from_addr``; on its own this falls back to ``$PORCHLIGHT_FROM_ADDR``.
         dry_run: When True (the default) nothing is sent — the message is logged and marked sent,
             which is what local runs and CI want.
         store: Where messages are persisted, and where recipient addresses are looked up.

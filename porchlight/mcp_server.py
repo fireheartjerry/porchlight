@@ -18,6 +18,7 @@ from .config import Settings, get_settings
 from .context import AppContext, build_context
 from .tools import (
     find_candidates_impl,
+    find_similar_open_requests_impl,
     lookup_requester_history_impl,
     query_log_impl,
     query_requests_impl,
@@ -62,7 +63,7 @@ def build_server(ctx: AppContext | None = None) -> FastMCP:
         ctx: Context the tools read from; defaults to the lazily built process context.
 
     Returns:
-        A configured :class:`FastMCP` server with the seven read-only Porchlight tools.
+        A configured :class:`FastMCP` server with the eight read-only Porchlight tools.
     """
     if ctx is not None:
         set_context(ctx)
@@ -76,6 +77,19 @@ def build_server(ctx: AppContext | None = None) -> FastMCP:
         first-time requester.
         """
         return lookup_requester_history_impl(get_context(), contact_or_name, agent="mcp")
+
+    @server.tool()
+    def find_similar_open_requests(
+        requester_id: str, category: str | None = None, window_hours: int = 72
+    ) -> list[dict]:
+        """Find open requests this neighbour already has on file, so a chase is not booked twice.
+
+        Returns {request_id, summary, category, status, created_at, window_start,
+        assigned_volunteer_id} dicts, newest first.
+        """
+        return find_similar_open_requests_impl(
+            get_context(), requester_id, category, window_hours, agent="mcp"
+        )
 
     @server.tool()
     def find_candidates(request_id: str, limit: int = 5) -> list[dict]:

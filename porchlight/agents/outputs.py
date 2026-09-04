@@ -46,8 +46,20 @@ class IntakeResult(_Out):
     money_involved: bool = Field(default=False, description="True if the group's money is asked for")
     safety_flags: list[str] = Field(default_factory=list, description="Danger signals, verbatim if possible")
     first_time_requester: bool = Field(default=False)
+    is_request: bool = Field(
+        default=True,
+        description="False when the message asks for nothing: thanks, chit-chat, spam, an update",
+    )
+    duplicate_of: str | None = Field(
+        default=None,
+        description="Request id this plainly repeats, from find_similar_open_requests; else null",
+    )
     needs_human: bool = Field(default=False, description="True when you are not confident enough to proceed")
     reasoning: str = Field(default="", description="Two lines on how you read the message")
+
+    def is_actionable(self) -> bool:
+        """False when this message needs no outreach: it asks for nothing, or repeats a job."""
+        return self.is_request and not self.duplicate_of
 
     def apply_to(self, request: AidRequest) -> AidRequest:
         """Copy the understood fields onto an existing request, leaving ids and status alone."""
@@ -64,6 +76,8 @@ class IntakeResult(_Out):
         merged = list(dict.fromkeys([*request.safety_flags, *self.safety_flags]))
         request.safety_flags = merged
         request.first_time_requester = request.first_time_requester or self.first_time_requester
+        request.is_request = self.is_request
+        request.duplicate_of = self.duplicate_of or request.duplicate_of
         return request
 
 

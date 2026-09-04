@@ -75,6 +75,8 @@ class SamplePlan:
         safety_flags: Danger signals worth quoting to the coordinator.
         zone: Neighbourhood zone named in the message.
         confidence: Matcher confidence override; ``None`` derives it from the scores.
+        is_request: False when the message asks for nothing (a thank-you note, chatter, spam).
+        duplicate: True when the message chases a request the same neighbour already has open.
         reasoning: Two lines on how intake read the message.
     """
 
@@ -88,6 +90,8 @@ class SamplePlan:
     safety_flags: tuple[str, ...] = ()
     zone: str | None = None
     confidence: float | None = None
+    is_request: bool = True
+    duplicate: bool = False
     reasoning: str = ""
 
 
@@ -227,6 +231,7 @@ SAMPLE_PLANS: dict[str, SamplePlan] = {
         urgency=Urgency.LOW,
         window=(18, 22),
         zone="Riverside",
+        duplicate=True,
         reasoning="Same person, same Thursday ride. Chasing, not a second job.",
     ),
     "sm_conflicting_times": SamplePlan(
@@ -242,6 +247,7 @@ SAMPLE_PLANS: dict[str, SamplePlan] = {
         category=Category.OTHER,
         urgency=Urgency.LOW,
         flexible=True,
+        is_request=False,
         reasoning="Not a request at all. Worth passing the thanks on to whoever cooked.",
     ),
     "sm_paper_slip": SamplePlan(
@@ -491,9 +497,10 @@ def _when_phrase(request: AidRequest, timezone: str) -> str:
 
 
 def _intake_turn(ctx: AppContext, request: AidRequest | None, messages: Messages) -> Turn:
-    """Look the requester up once, then return the structured reading of the message."""
+    """Look the requester up once, check for a duplicate, then read the message."""
     plan = plan_for(request)
-    if "lookup_requester_history" not in called(messages) and request is not None:
+    done = called(messages)
+    if "lookup_requester_history" not in done and request is not None:
         requester = ctx.store.get_requester(request.requester_id) if request.requester_id else None
         needle = (requester.contact if requester else None) or request.requester_id or plan.summary
         return Turn(tool_calls=[("lookup_requester_history", {"contact_or_name": needle})])
@@ -501,6 +508,15 @@ def _intake_turn(ctx: AppContext, request: AidRequest | None, messages: Messages
     now = ctx.now()
     window = plan.window
     requester = ctx.store.get_requester(request.requester_id) if request and request.requester_id else None
+    if plan.duplicate and requester is not None and "find_similar_open_requests" not in done:
+        return Turn(
+            tool_calls=[
+                (
+                    "find_similar_open_requests",
+                    {"requester_id": requester.id, "category": str(plan.category)},
+                )
+            ]
+        )
     return Turn(
         structured={
             "summary": plan.summary,
@@ -517,10 +533,62 @@ def _intake_turn(ctx: AppContext, request: AidRequest | None, messages: Messages
             "money_involved": plan.money_involved,
             "safety_flags": list(plan.safety_flags),
             "first_time_requester": bool(request.first_time_requester) if request else False,
+            "is_request": plan.is_request,
+            "duplicate_of": _duplicate_of(
+                messages, plan.summary, now + timedelta(hours=window[0]) if window else None
+            )
+            if plan.duplicate
+            else None,
             "needs_human": bool(plan.safety_flags) or plan.money_involved,
             "reasoning": plan.reasoning,
         }
     )
+
+
+def _duplicate_of(messages: Messages, summary: str, window_start: datetime | None) -> str | None:
+    """Which open request this message is chasing, out of what the lookup turned up.
+
+    The same neighbour can easily have three open rides — a standing Thursday appointment, a
+    same-day clinic change, and a half-audible voicemail — so the match is the one whose summary
+    this message actually echoes, with the nearest window breaking a tie.
+    """
+    found = last_result(messages, "find_similar_open_requests") or []
+    rows = [row for row in found if isinstance(row, dict) and row.get("request_id")]
+    if not rows:
+        return None
+    wanted = _words(summary)
+    rows.sort(
+        key=lambda row: (
+            -len(wanted & _words(str(row.get("summary") or ""))),
+            _window_gap(row.get("window_start"), window_start),
+        )
+    )
+    return str(rows[0]["request_id"])
+
+
+STOPWORDS = frozenset(
+    {"a", "an", "and", "the", "to", "for", "of", "on", "in", "at", "already", "hand", "again"}
+)
+"""Words too common to say two summaries are about the same job."""
+
+
+def _words(text: str) -> set[str]:
+    """The distinctive words in a summary, lower-cased."""
+    return {
+        word.strip(".,;:!?'\"").lower()
+        for word in text.split()
+        if word.strip(".,;:!?'\"").lower() not in STOPWORDS and len(word) > 2
+    }
+
+
+def _window_gap(candidate: Any, wanted: datetime | None) -> float:
+    """Seconds between a candidate's window and the one this message is about."""
+    if wanted is None or not isinstance(candidate, str) or not candidate:
+        return float("inf")
+    try:
+        return abs((datetime.fromisoformat(candidate) - wanted).total_seconds())
+    except ValueError:  # pragma: no cover - the store always writes ISO-8601
+        return float("inf")
 
 
 def _confidence(plan: SamplePlan, candidates: Sequence[dict[str, Any]]) -> float:
@@ -795,8 +863,63 @@ def _outreach_result(ctx: AppContext, volunteer_id: str, intent: str, text: str)
     }
 
 
+def _close_out_reply(ctx: AppContext, request: AidRequest, requester: Requester | None) -> str:
+    """The one warm line a thank-you note or a duplicate gets back."""
+    who = _first_name(requester.name if requester else None)
+    if not request.duplicate_of:
+        return (
+            f"Thank you {who} — that has been passed on to the neighbour who cooked, and it will "
+            "make their week. Nothing needed from us."
+        )
+    original = ctx.store.get_request(request.duplicate_of)
+    when = _when_phrase(original, ctx.settings.timezone) if original else "as arranged"
+    return (
+        f"Got it {who} — your earlier message came through and it is in hand {when}. "
+        "You will hear from us as soon as someone is confirmed."
+    )
+
+
+def _close_out_turn(ctx: AppContext, request: AidRequest, messages: Messages) -> Turn:
+    """Reply politely and close a message that needs no outreach at all."""
+    done = called(messages)
+    requester = ctx.store.get_requester(request.requester_id) if request.requester_id else None
+    reason = (
+        f"duplicate of {request.duplicate_of}" if request.duplicate_of else "thank-you note, no help needed"
+    )
+    if "send_message" not in done and request.requester_id:
+        return Turn(
+            tool_calls=[
+                (
+                    "send_message",
+                    {
+                        "request_id": request.id,
+                        "to": "requester",
+                        "recipient_id": request.requester_id,
+                        "body": _close_out_reply(ctx, request, requester),
+                    },
+                )
+            ]
+        )
+    if "close_request" not in done:
+        return Turn(
+            tool_calls=[("close_request", {"request_id": request.id, "outcome": "cancelled", "note": reason})]
+        )
+    return Turn(
+        structured={
+            "confirmed": False,
+            "requester_message": _close_out_reply(ctx, request, requester),
+            "reminder_at": None,
+            "memory_notes": [],
+            "outcome": "cancelled",
+            "summary": f"Closed without asking anybody: {reason}.",
+        }
+    )
+
+
 def _steward_turn(ctx: AppContext, request: AidRequest | None, messages: Messages) -> Turn:
     """Tell the neighbour who is coming, set a reminder, and write down what was learned."""
+    if request is not None and not request.needs_outreach():
+        return _close_out_turn(ctx, request, messages)
     if request is None or not request.assigned_volunteer_id:
         return Turn(structured={"outcome": "pending", "summary": "nothing to confirm yet"})
 

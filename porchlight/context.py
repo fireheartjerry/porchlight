@@ -115,6 +115,35 @@ def _build_memory(settings: Settings) -> Any | None:
     return make_memory_store(settings)
 
 
+def persisting_emit(store: Store, inner: Callable[[dict], None]) -> Callable[[dict], None]:
+    """Wrap a trace sink so every event is also written to the store.
+
+    Persisting the trace is what lets a split deployment — the API on Lambda, the agents on
+    AgentCore Runtime — still show a live trace: the API polls
+    :meth:`~porchlight.store.base.Store.list_trace` instead of listening to an in-process bus it
+    is not part of. Neither the store write nor the wrapped sink is allowed to break a run.
+
+    Args:
+        store: Where trace events are persisted.
+        inner: The sink to call after persisting.
+
+    Returns:
+        A sink that persists and then forwards.
+    """
+
+    def emit(event: dict) -> None:
+        try:
+            store.append_trace(event)
+        except Exception:  # pragma: no cover - a full disk must not stop the dispatcher
+            logger.exception("failed to persist trace event")
+        try:
+            inner(event)
+        except Exception:  # pragma: no cover - a broken sink must not stop the dispatcher
+            logger.exception("trace sink raised")
+
+    return emit
+
+
 def build_context(settings: Settings | None = None, **overrides: Any) -> AppContext:
     """Assemble an :class:`AppContext` from settings.
 
@@ -126,7 +155,8 @@ def build_context(settings: Settings | None = None, **overrides: Any) -> AppCont
     Args:
         settings: Settings to use; defaults to :func:`porchlight.config.get_settings`.
         **overrides: Any :class:`AppContext` field to override (``store``, ``channel``,
-            ``memory``, ``clock``, ``emit``).
+            ``memory``, ``clock``, ``emit``), plus ``persist_trace`` (default ``True``) — set it
+            ``False`` to keep trace events out of the store.
 
     Returns:
         A ready-to-use context.
@@ -141,6 +171,9 @@ def build_context(settings: Settings | None = None, **overrides: Any) -> AppCont
     if memory == "__unset__":
         memory = _build_memory(settings)
     emit: Callable[[dict], None] = overrides.pop("emit", None) or _noop_emit
+    persist = overrides.pop("persist_trace", True)
     if overrides:
         raise TypeError(f"unexpected overrides: {sorted(overrides)}")
+    if persist:
+        emit = persisting_emit(store, emit)
     return AppContext(settings=settings, store=store, channel=channel, memory=memory, clock=clock, emit=emit)

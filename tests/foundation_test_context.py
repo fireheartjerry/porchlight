@@ -137,6 +137,7 @@ def test_tool_groups_are_exported_and_consistent() -> None:
         "lookup_requester_history",
         "find_candidates",
         "volunteer_load",
+        "find_similar_open_requests",
         "recall_memory",
         "remember",
         "send_message",

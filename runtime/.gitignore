@@ -1,0 +1,3 @@
+# `make package-runtime` rsyncs the repo's porchlight package in here so the CodeZip build can
+# see it. It is a build artifact — the source of truth is /porchlight.
+/porchlight/

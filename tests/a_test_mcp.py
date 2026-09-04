@@ -19,6 +19,7 @@ from porchlight.tools.mcp_bridge import SERVER_MODULE, make_mcp_tools, server_en
 
 EXPECTED_TOOLS = {
     "lookup_requester_history",
+    "find_similar_open_requests",
     "find_candidates",
     "volunteer_load",
     "query_requests",

@@ -12,6 +12,7 @@ Mode = Literal["demo", "live"]
 ModelProvider = Literal["bedrock", "mock"]
 StoreKind = Literal["sqlite", "dynamo"]
 ToolsKind = Literal["local", "mcp"]
+EventsSource = Literal["memory", "store"]
 
 
 class Settings(BaseSettings):
@@ -30,6 +31,12 @@ class Settings(BaseSettings):
     model_provider: ModelProvider = "bedrock"
     store: StoreKind = "sqlite"
     tools: ToolsKind = "local"
+    events_source: EventsSource = "memory"
+    """Where ``/api/events`` reads from: this process's bus, or the store's persisted trace.
+
+    Set it to ``store`` when the API and the agents run in different processes — the API on
+    Lambda, the graph on AgentCore Runtime — so the porch still sees a live trace.
+    """
 
     # --- local persistence --------------------------------------------------
     sqlite_path: str = "data/local/porchlight.db"
@@ -37,13 +44,24 @@ class Settings(BaseSettings):
 
     # --- AWS ----------------------------------------------------------------
     session_bucket: str | None = None
-    memory_id: str | None = None
+    memory_id: str | None = Field(
+        default=None,
+        # The AgentCore CLI's CDK injects the deployed memory id as MEMORY_<NAME>_ID, where
+        # <NAME> is the memory's name upper-cased — "PorchlightMemory" in agentcore/agentcore.json.
+        validation_alias=AliasChoices("PORCHLIGHT_MEMORY_ID", "MEMORY_PORCHLIGHTMEMORY_ID"),
+    )
     dynamo_table: str = "porchlight"
     aws_region: str = Field(
         default="us-west-2",
         validation_alias=AliasChoices("PORCHLIGHT_AWS_REGION", "AWS_REGION", "AWS_DEFAULT_REGION"),
     )
     agent_runtime_arn: str | None = None
+
+    # --- messaging ----------------------------------------------------------
+    from_addr: str = Field(
+        default="porchlight@example.org",
+        description="Verified SES sender address used by EmailChannel in live mode",
+    )
 
     # --- models -------------------------------------------------------------
     model_sonnet: str = "global.anthropic.claude-sonnet-4-6"

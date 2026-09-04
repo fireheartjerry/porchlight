@@ -41,8 +41,9 @@ Four Strands agents in a `Graph`, with a bounded retry cycle for outreach:
 
 ```
 raw message ──▶ intake ──▶ matcher ──▶ outreach ──▶ steward
-   (sms/email/     │           ▲           │
-    form/photo)    │           └─ decline ─┘   (bounded by max_candidates)
+   (sms/email/     │  │        ▲           │           ▲
+    form/photo)    │  │        └─ decline ─┘           │  (bounded by max_candidates)
+                   │  └── not a request, or a duplicate ┘
                    │
               [Decision Card]  ← a Strands interrupt, persisted by the session manager
 ```
@@ -70,6 +71,7 @@ graph gate before any outreach happens, and again at the tool boundary as defenc
 | Nobody accepted after `max_candidates` asks, or the window is closing | Card with options: widen pool, reschedule, I'll take it, decline | `unmatched_card`, `run_sweep` |
 | Matcher confidence below `confidence_threshold` | Card instead of a guess | `PolicyGateHook` |
 | A message would go out during quiet hours (21:00–08:00 local) | **Guide** — schedule it for the morning instead | `is_quiet_hours`, `next_send_time` |
+| The message is a thank-you note, or repeats a request already in hand | Skip matching and outreach; the steward replies once and closes it | `find_similar_open_requests`, `AidRequest.needs_outreach` |
 | An outbound message carries the neighbour's phone or address to a volunteer who has not accepted | **Transform** — redact; share only after acceptance | `redact_pii` |
 | Everything else — a routine ride, groceries, a meal, with a good match | Fully autonomous, logged with a rationale | — |
 
@@ -83,7 +85,7 @@ A card is asked **once** per request per kind: the graph gate raises it, the coo
 Judges score depth, so here is exactly where each feature lives.
 
 - **`Agent` + `structured_output_model` on every agent** — [`porchlight/agents/base.py`](porchlight/agents/base.py), [`porchlight/agents/outputs.py`](porchlight/agents/outputs.py)
-- **`@tool(context=True)`** — 14 tools reading `AppContext` from `invocation_state` — [`porchlight/tools/`](porchlight/tools/)
+- **`@tool(context=True)`** — 15 tools reading `AppContext` from `invocation_state` — [`porchlight/tools/`](porchlight/tools/)
 - **Agent-as-tool sub-agent** — `interpret_reply` is a one-shot agent exposed as a tool — [`porchlight/agents/outreach.py`](porchlight/agents/outreach.py)
 - **`GraphBuilder`** with conditional edges, `set_max_node_executions`, `reset_on_revisit`, a bounded outreach cycle — [`porchlight/graph.py`](porchlight/graph.py)
 - **Interventions** — `InterventionHandler` returning `Deny` / `Confirm` / `Guide` / `Transform` / `Proceed` — `PorchlightPolicy` in [`porchlight/policy.py`](porchlight/policy.py)
@@ -110,7 +112,7 @@ git clone <this repo> && cd porchlight
 python3.12 -m venv .venv && source .venv/bin/activate
 make install          # uv pip install -e ".[dev]"
 
-make test             # 523 tests, no network
+make test             # 606 tests, no network
 make demo-mock        # six neighbourhood requests through the real Strands graph
 make api              # FastAPI on http://localhost:8000
 ```
@@ -156,6 +158,8 @@ Every variable is optional; copy [`.env.example`](.env.example) to `.env` to cha
 | `PORCHLIGHT_MODEL_PROVIDER` | `bedrock` | `mock` runs the whole system with no AWS |
 | `PORCHLIGHT_STORE` | `sqlite` | `sqlite` or `dynamo` (single table) |
 | `PORCHLIGHT_TOOLS` | `local` | `mcp` consumes the same tools over MCP instead |
+| `PORCHLIGHT_EVENTS_SOURCE` | `memory` | `store` tails the persisted trace, for split deployments |
+| `PORCHLIGHT_FROM_ADDR` | `porchlight@example.org` | Verified SES sender in live mode |
 | `PORCHLIGHT_SQLITE_PATH` | `data/local/porchlight.db` | Local database (`:memory:` allowed) |
 | `PORCHLIGHT_SESSION_DIR` | `data/sessions` | Where graph sessions and persisted interrupts live |
 | `PORCHLIGHT_SESSION_BUCKET` | — | Set to use `S3SessionManager` instead of files |
@@ -175,6 +179,59 @@ Every variable is optional; copy [`.env.example`](.env.example) to `.env` to cha
 
 ---
 
+## Deploying to AWS
+
+Porchlight deploys as two halves, and one command does both:
+
+```bash
+make smoke-bedrock    # prove this account can actually call the models
+make deploy           # AgentCore Runtime + Memory, then the app stack
+```
+
+**The agents** — the whole Strands graph in [`porchlight/runtime.py`](porchlight/runtime.py) — go to
+**Amazon Bedrock AgentCore Runtime** as a CodeZip build, with an **AgentCore Memory** for what it
+learns about each volunteer and neighbour. That half is [`agentcore/`](agentcore/) (the AgentCore
+CLI) plus [`runtime/`](runtime/) (the bundle).
+
+**Everything else** goes in one CDK stack, [`infra/`](infra/): the DynamoDB single table, the S3
+bucket Strands' session manager persists interrupts to, the FastAPI app as a Lambda behind a
+streaming Function URL (Lambda Web Adapter, so `/api/events` really streams), an EventBridge
+Scheduler pair for the hourly sweep and the morning brief, and CloudFront in front of the UI with
+`/api/*` proxied to the function so the porch is same-origin.
+
+```
+CloudFront ─┬─ /          ─▶ S3 (the Porch)
+            └─ /api/*     ─▶ Lambda Function URL (FastAPI, response streaming)
+                                 │
+                                 ├─ DynamoDB "porchlight"     (single table + GSI1)
+                                 ├─ S3 session bucket          (graph sessions, interrupts)
+                                 └─ AgentCore Runtime ─▶ AgentCore Memory
+EventBridge Scheduler ─ hourly sweep · 06:00 brief ─▶ sweep Lambda
+```
+
+The two halves never import each other. They meet through four names — the runtime ARN, the memory
+id, the table, and the session bucket — handed over through SSM and `.env.deploy`, and
+`tests/v_test_deploy_config.py` fails the build if they ever stop matching.
+
+Deploying only the app stack works too: with no runtime ARN the API runs the graph in-process and
+calls Bedrock directly, which is a complete, demoable system.
+
+Both builds work with **no AWS credentials at all**, which is the cheap way to check them:
+
+```bash
+make synth              # render the app stack's CloudFormation
+agentcore validate      # check the AgentCore project
+make package-runtime    # build the 55 MB CodeZip
+make build-lambda       # build the 72 MB arm64 Lambda bundle
+```
+
+**[docs/DEPLOY.md](docs/DEPLOY.md)** is the full guide: prerequisites, `aws login`, Bedrock model
+access, `cdk bootstrap`, deploying, verifying, a troubleshooting table, tearing down with
+`make destroy`, and what it costs (on-demand everything — the only real spend is Bedrock tokens, a
+few cents for a 24-request demo day).
+
+---
+
 ## Repo layout
 
 ```
@@ -186,18 +243,21 @@ porchlight/
                    simulator, and mock_scenarios.py (the offline demo's model)
   store/           Store protocol; SqliteStore and DynamoStore
   testing/         MockModel / ScenarioModel and the Pydantic example synthesizer
-  tools/           the 14 @tool functions, grouped per agent, plus the MCP bridge
+  tools/           the 15 @tool functions, grouped per agent, plus the MCP bridge
   graph.py         the Strands Graph, run_request / resume_decision / run_sweep / run_brief
   policy.py        deterministic rules, decision cards, PorchlightPolicy, AuditHook, TraceHook
   matching.py      the six-component volunteer scoring model
   orchestrator.py  LocalOrchestrator (in-process) and AgentCoreOrchestrator (invoke_agent_runtime)
   runtime.py       the AgentCore Runtime entrypoint
   mcp_server.py    the read-only tools, served over MCP
-api/               FastAPI app; api/lambda_handler.py wraps it with Mangum
+api/               FastAPI app; scheduled.py for the sweep/brief Lambda
 web/               "The Porch" — React + Vite + Tailwind
-scripts/           seed.py, run_day.py
-docs/              DESIGN.md, CONTRACTS.md, UI.md, architecture.png, research/
-tests/             pytest; foundation_*, a_*, b_*, c_*, i_* by area
+agentcore/         the AgentCore project: one Runtime, one Memory, and the CLI's CDK app
+runtime/           the CodeZip codeLocation — main.py, its IAM policy, its dependency manifest
+infra/             CDK app for everything else: table, buckets, Lambdas, scheduler, CloudFront
+scripts/           seed.py, run_day.py, build_lambda.sh, smoke_bedrock.py
+docs/              DESIGN.md, CONTRACTS.md, DEPLOY.md, UI.md, architecture.png, research/
+tests/             pytest; foundation_*, a_*, b_*, c_*, h_*, i_*, v_* by area
 ```
 
 ---
@@ -209,11 +269,16 @@ make test                       # everything
 pytest -q tests/i_test_integration.py   # the end-to-end graph tests
 ```
 
-523 tests, all offline. They cover the domain model and store, the six-component matcher, all 14
+606 tests, all offline. They cover the domain model and store, the six-component matcher, all 15
 tools (called directly *and* through a real `strands.Agent`), the channels, the memory stores, a
 real MCP round trip over stdio, every policy rule, the agents, the graph's four scenarios
 (routine / safety / decline-decline-accept / resume-in-a-new-process), the runtime, the API, and an
-end-to-end pass of every one of the 24 sample messages through the real Strands graph.
+end-to-end pass of every one of the 24 sample messages through the real Strands graph. The
+`h_*` modules cover the hardening: fifty rounds of concurrent `assign_volunteer` / `record_attempt`
+against one row, the not-a-request and duplicate short circuits, and the persisted trace behind
+`/api/events/poll`. `v_test_deploy_config.py` reads `agentcore/` and `infra/` as data and fails if
+the two deployment halves stop agreeing about the table, the bucket, the region, or an env var name
+— the kind of drift that is otherwise silent until a live invocation.
 
 The offline demo is driven by `PorchlightScenarioModel`, a `strands.models.Model` that plays each
 agent's part from live state rather than replaying a canned script — it ranks the real roster, texts

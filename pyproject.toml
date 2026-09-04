@@ -44,7 +44,21 @@ filterwarnings = ["ignore::DeprecationWarning"]
 [tool.ruff]
 line-length = 110
 target-version = "py312"
-exclude = [".venv", "web", "infra", "cdk.out", "*.md"]
+# Everything below `*.md` is a build artifact holding vendored wheels: the Lambda bundle, the
+# rsynced mirror of porchlight/, and the CodeZip staging trees. All are gitignored, which ruff
+# already honours — naming them keeps `ruff check --no-respect-gitignore` usable too.
+exclude = [
+    ".venv",
+    "web",
+    "infra",
+    "cdk.out",
+    "*.md",
+    "build",
+    "runtime/porchlight",
+    "agentcore/.cache",
+    "agentcore/Porchlight",
+    "agentcore/cdk",
+]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "W"]

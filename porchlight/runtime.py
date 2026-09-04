@@ -10,7 +10,13 @@ Runs the same graph the local demo runs, behind ``POST /invocations``::
 Add ``"stream": true`` to any of them to get the trace events as server-sent events while the
 graph is still running — that is what the Trace drawer in the web UI reads.
 
-Locally: ``python -m porchlight.runtime`` (port 8080).
+The entrypoint also takes AgentCore's ``context``. Its ``session_id`` is what the API put in
+``invoke_agent_runtime(runtimeSessionId=...)`` — for a request that is
+``porchlight.orchestrator.runtime_session_id(request_id)`` — so it comes back in every
+response, is logged with every invocation, and stands in for ``request_id`` when a caller
+sends ``{"action": "process_request"}`` with nothing else.
+
+Locally: ``python -m porchlight.runtime`` (port 8080), or ``python runtime/main.py``.
 """
 
 from __future__ import annotations
@@ -36,9 +42,21 @@ ACTIONS = ("process_request", "resume_decision", "sweep", "brief")
 POLL_INTERVAL = 0.05
 """How often the streaming loop checks for new trace events, in seconds."""
 
+REQUEST_ID_PREFIX = "req_"
+"""Session ids that start with this carry a request id in their first segment."""
+
 app = BedrockAgentCoreApp()
 
-__all__ = ["ACTIONS", "app", "dispatch", "main", "porchlight_entrypoint", "runtime_settings"]
+__all__ = [
+    "ACTIONS",
+    "app",
+    "dispatch",
+    "main",
+    "porchlight_entrypoint",
+    "request_id_from_session",
+    "runtime_settings",
+    "session_id_of",
+]
 
 
 def runtime_settings() -> Settings:
@@ -54,6 +72,40 @@ def _context(emit: Any = None) -> AppContext:
     return build_context(settings, **({"emit": emit} if emit is not None else {}))
 
 
+def session_id_of(context: Any) -> str | None:
+    """The AgentCore session id for this invocation, if there is one.
+
+    Args:
+        context: AgentCore's ``RequestContext`` (or anything, or ``None`` — running the
+            entrypoint by hand in a test passes no context at all).
+
+    Returns:
+        The non-empty ``session_id``, or ``None``.
+    """
+    session_id = getattr(context, "session_id", None)
+    return session_id if isinstance(session_id, str) and session_id else None
+
+
+def request_id_from_session(session_id: str | None) -> str | None:
+    """Recover the request id the API encoded into an AgentCore session id.
+
+    ``porchlight.orchestrator.runtime_session_id`` pads a short id to AgentCore's 33-character
+    minimum by appending ``-<sha256>``. Request ids are ``req_<hex>`` and carry no dash, so the
+    first segment is the id. Session keys for the other actions (``sweep-...``, ``brief-...``)
+    do not start with ``req_`` and are left alone.
+
+    Args:
+        session_id: The runtime session id, or ``None``.
+
+    Returns:
+        The request id, or ``None`` when the session id does not encode one.
+    """
+    if not session_id or not session_id.startswith(REQUEST_ID_PREFIX):
+        return None
+    request_id = session_id.split("-", 1)[0]
+    return request_id if len(request_id) > len(REQUEST_ID_PREFIX) else None
+
+
 def _parse_day(value: Any) -> date | None:
     """Parse a ``YYYY-MM-DD`` payload field, tolerating junk."""
     if not isinstance(value, str) or not value.strip():
@@ -65,45 +117,51 @@ def _parse_day(value: Any) -> date | None:
         return None
 
 
-def dispatch(ctx: AppContext, payload: dict[str, Any]) -> dict[str, Any]:
+def dispatch(ctx: AppContext, payload: dict[str, Any], session_id: str | None = None) -> dict[str, Any]:
     """Run one payload against the graph and return a JSON-safe result.
 
     Args:
         ctx: Application context (store, channel, memory, clock, trace sink).
         payload: The invocation payload; ``action`` selects what to do.
+        session_id: AgentCore's session id for this invocation. Echoed back on every result,
+            and used as the request id when ``process_request`` arrives without one.
 
     Returns:
-        ``{"action": ..., "ok": bool, ...}``. Unknown actions and missing arguments come back
-        as ``ok=False`` with a message rather than raising, so the caller always gets JSON.
+        ``{"action": ..., "ok": bool, "session_id": ..., ...}``. Unknown actions and missing
+        arguments come back as ``ok=False`` with a message rather than raising, so the caller
+        always gets JSON.
     """
     action = str(payload.get("action") or "process_request")
+    result: dict[str, Any] = {"action": action, "session_id": session_id}
 
     if action == "process_request":
         request_id = payload.get("request_id")
         if not isinstance(request_id, str) or not request_id:
-            return {"action": action, "ok": False, "error": "request_id is required"}
+            request_id = request_id_from_session(session_id)
+        if not request_id:
+            return {**result, "ok": False, "error": "request_id is required"}
         outcome = run_request(ctx, request_id, image_base64=payload.get("image_base64"))
-        return {"action": action, "ok": True, "outcome": jsonable(outcome)}
+        return {**result, "ok": True, "outcome": jsonable(outcome)}
 
     if action == "resume_decision":
         decision_id = payload.get("decision_id")
         option_id = payload.get("option_id")
         if not isinstance(decision_id, str) or not isinstance(option_id, str):
-            return {"action": action, "ok": False, "error": "decision_id and option_id are required"}
+            return {**result, "ok": False, "error": "decision_id and option_id are required"}
         outcome = resume_decision(ctx, decision_id, option_id, payload.get("note"))
-        return {"action": action, "ok": True, "outcome": jsonable(outcome)}
+        return {**result, "ok": True, "outcome": jsonable(outcome)}
 
     if action == "sweep":
-        return {"action": action, "ok": True, "outcome": jsonable(run_sweep(ctx))}
+        return {**result, "ok": True, "outcome": jsonable(run_sweep(ctx))}
 
     if action == "brief":
         markdown = run_brief(ctx, _parse_day(payload.get("day")))
-        return {"action": action, "ok": True, "markdown": markdown}
+        return {**result, "ok": True, "markdown": markdown}
 
-    return {"action": action, "ok": False, "error": f"unknown action; expected one of {list(ACTIONS)}"}
+    return {**result, "ok": False, "error": f"unknown action; expected one of {list(ACTIONS)}"}
 
 
-async def _stream(payload: dict[str, Any]) -> AsyncIterator[dict[str, Any]]:
+async def _stream(payload: dict[str, Any], session_id: str | None = None) -> AsyncIterator[dict[str, Any]]:
     """Run the payload on a worker thread, yielding trace events as they are emitted."""
     loop = asyncio.get_running_loop()
     queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
@@ -112,7 +170,7 @@ async def _stream(payload: dict[str, Any]) -> AsyncIterator[dict[str, Any]]:
         loop.call_soon_threadsafe(queue.put_nowait, event)
 
     ctx = _context(emit=emit)
-    work = asyncio.create_task(asyncio.to_thread(dispatch, ctx, payload))
+    work = asyncio.create_task(asyncio.to_thread(dispatch, ctx, payload, session_id))
     try:
         while not work.done() or not queue.empty():
             try:
@@ -130,12 +188,20 @@ async def _stream(payload: dict[str, Any]) -> AsyncIterator[dict[str, Any]]:
 
 
 @app.entrypoint
-def porchlight_entrypoint(payload: dict[str, Any] | None = None) -> Any:
-    """AgentCore entrypoint: a dict for a normal call, an SSE stream when ``stream`` is set."""
+def porchlight_entrypoint(payload: dict[str, Any] | None = None, context: Any = None) -> Any:
+    """AgentCore entrypoint: a dict for a normal call, an SSE stream when ``stream`` is set.
+
+    Args:
+        payload: The decoded JSON body of ``POST /invocations``.
+        context: AgentCore's ``RequestContext``. The parameter has to be named ``context``
+            — that is how ``BedrockAgentCoreApp`` decides whether to pass one.
+    """
     payload = payload or {}
+    session_id = session_id_of(context)
+    logger.info("invocation action=%r session=%r", payload.get("action"), session_id)
     if payload.get("stream"):
-        return _stream(payload)
-    return dispatch(_context(), payload)
+        return _stream(payload, session_id)
+    return dispatch(_context(), payload, session_id)
 
 
 def main() -> None:

@@ -1,0 +1,32 @@
+# Dependency manifest for the AgentCore CodeZip build.
+#
+# `agentcore package` runs `uv pip install -r runtime/pyproject.toml --target <staging>
+# --python-version 3.14 --python-platform aarch64-manylinux... --only-binary :all:`, then copies
+# this directory (including the rsynced `porchlight/` package) over the top and zips the result.
+#
+# Keep this in sync with the runtime half of the root pyproject: no FastAPI, no uvicorn, no
+# Mangum — the API is a separate Lambda; the runtime only needs the graph and its adapters.
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "porchlight-runtime"
+version = "0.1.0"
+description = "Porchlight's Strands graph, packaged for Amazon Bedrock AgentCore Runtime."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "strands-agents",
+    "strands-agents-tools",
+    "bedrock-agentcore>=1.9.1",
+    "boto3",
+    "pydantic>=2",
+    "pydantic-settings",
+    "python-dateutil",
+    "aws-opentelemetry-distro",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["porchlight"]

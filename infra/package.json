@@ -1,0 +1,27 @@
+{
+  "name": "porchlight-infra",
+  "version": "0.1.0",
+  "private": true,
+  "description": "CDK app stack for Porchlight: table, session bucket, API Lambda, scheduler, CloudFront.",
+  "license": "MIT",
+  "bin": {
+    "porchlight": "bin/porchlight.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc -w",
+    "synth": "cdk synth",
+    "deploy": "cdk deploy --require-approval never"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "aws-cdk": "^2.1000.0",
+    "source-map-support": "^0.5.21",
+    "ts-node": "^10.9.2",
+    "typescript": "~5.7.2"
+  },
+  "dependencies": {
+    "aws-cdk-lib": "^2.180.0",
+    "constructs": "^10.4.2"
+  }
+}

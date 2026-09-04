@@ -3,11 +3,19 @@
 from __future__ import annotations
 
 from ..config import Settings
-from .base import Store
+from .base import StaleVersionError, Store, apply_fields, trace_row
 from .dynamo_store import DynamoStore
 from .sqlite_store import SqliteStore
 
-__all__ = ["DynamoStore", "SqliteStore", "Store", "make_store"]
+__all__ = [
+    "DynamoStore",
+    "SqliteStore",
+    "StaleVersionError",
+    "Store",
+    "apply_fields",
+    "make_store",
+    "trace_row",
+]
 
 
 def make_store(settings: Settings) -> Store:

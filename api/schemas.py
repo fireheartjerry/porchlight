@@ -153,16 +153,29 @@ class SampleMessage(BaseModel):
 class TraceEvent(BaseModel):
     """The shape every SSE frame uses (``docs/CONTRACTS.md`` §7)."""
 
+    model_config = ConfigDict(extra="ignore")
+
     type: str
     ts: str
     request_id: str | None = None
     agent: str | None = None
     summary: str = ""
     detail: dict[str, Any] = Field(default_factory=dict)
+    cursor: int | None = Field(
+        default=None, description="Position in the persisted trace; null for in-process events"
+    )
+
+
+class EventsPage(BaseModel):
+    """One page of persisted trace events, for clients that poll instead of streaming."""
+
+    events: list[TraceEvent] = Field(default_factory=list)
+    cursor: int = Field(default=0, description="Pass this back as ?since= to get the next page")
 
 
 __all__ = [
     "BriefResponse",
+    "EventsPage",
     "HealthResponse",
     "InboxIn",
     "PorchResponse",

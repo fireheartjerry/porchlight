@@ -3,8 +3,9 @@
 Shape of the graph::
 
     intake ──▶ matcher ──▶ outreach ──▶ steward
-                  ▲            │
-                  └── decline ─┘   (bounded by settings.max_candidates)
+       │          ▲            │            ▲
+       │          └── decline ─┘            │   (bounded by settings.max_candidates)
+       └──────── not a request, or a duplicate ─┘
 
 Two decision points are **graph-level interrupts**, raised by :class:`PolicyGateHook` before a
 node runs, so the pause is persisted by the session manager and survives the process:
@@ -76,6 +77,13 @@ INTERRUPT_NAME = "porchlight-decision"
 """Name given to every graph-level interrupt; the node id makes each one unique."""
 
 NODES = ("intake", "matcher", "outreach", "steward")
+
+_STEWARD_CLOSING: dict[str, RequestStatus] = {
+    "completed": RequestStatus.COMPLETED,
+    "cancelled": RequestStatus.CANCELLED,
+    "declined": RequestStatus.DECLINED,
+}
+"""Steward outcomes that close a request out, and the status each one lands on."""
 
 __all__ = [
     "PolicyGateHook",
@@ -172,6 +180,31 @@ def _log(
     )
 
 
+def _save(ctx: AppContext, request_id: str, **fields: Any) -> AidRequest | None:
+    """Write a few fields of one request atomically, stamping ``updated_at``.
+
+    Every status change in the graph goes through here rather than ``put_request``: a node, a
+    tool, and the sweep can all be touching the same request, and a whole-row rewrite would
+    quietly drop whichever change lost the race.
+    """
+    try:
+        return ctx.store.update_request_fields(request_id, updated_at=ctx.now(), **fields)
+    except Exception:  # pragma: no cover - a store hiccup must not take the run down
+        logger.exception("failed to update request %s", request_id)
+        return ctx.store.get_request(request_id)
+
+
+def _changed_fields(before: AidRequest, after: AidRequest) -> dict[str, Any]:
+    """The fields that differ between two versions of a request (ignoring id and version)."""
+    old = before.model_dump(mode="json")
+    new = after.model_dump(mode="json")
+    return {
+        name: getattr(after, name)
+        for name in new
+        if name not in ("id", "version", "updated_at") and new[name] != old[name]
+    }
+
+
 # --------------------------------------------------------------------------------------
 # Hooks
 # --------------------------------------------------------------------------------------
@@ -243,23 +276,21 @@ class PolicyGateHook(HookProvider):
         """Turn the coordinator's chosen option into a state change on the request."""
         option = (option_id_of(response) or "").lower()
         note = response.get("note") if isinstance(response, dict) else None
-        fresh = self.ctx.store.get_request(request.id) or request
 
         if option in APPROVING_OPTIONS:
-            fresh.status = RequestStatus.MATCHING
+            status = RequestStatus.MATCHING
             summary = f"coordinator chose '{option}' — continuing"
         elif option == "decline_request":
-            fresh.status = RequestStatus.DECLINED
+            status = RequestStatus.DECLINED
             summary = "coordinator declined the request"
         else:
-            fresh.status = RequestStatus.ESCALATED
+            status = RequestStatus.ESCALATED
             summary = f"coordinator chose '{option or 'no option'}' — Porchlight stands down"
 
-        fresh.touch(self.ctx.now())
-        self.ctx.store.put_request(fresh)
+        _save(self.ctx, request.id, status=status)
         _log(
             self.ctx,
-            fresh.id,
+            request.id,
             LogKind.DECISION,
             summary,
             autonomous=False,
@@ -289,26 +320,40 @@ class RequestSyncHook(HookProvider):
         if request is None or graph_state is None:
             return
 
+        draft = request.model_copy(deep=True)
         if event.node_id == "intake":
             parsed = node_output(graph_state, "intake", IntakeResult)
             if parsed is not None:
-                parsed.apply_to(request)
-                _log(self.ctx, request.id, LogKind.TOOL_CALL, f"intake: {request.summary or 'parsed'}")
-            if request.status in (RequestStatus.NEW, RequestStatus.TRIAGING):
-                request.status = RequestStatus.MATCHING
+                parsed.apply_to(draft)
+                _log(self.ctx, draft.id, LogKind.TOOL_CALL, f"intake: {draft.summary or 'parsed'}")
+            if draft.status in (RequestStatus.NEW, RequestStatus.TRIAGING) and draft.needs_outreach():
+                draft.status = RequestStatus.MATCHING
+            if not draft.needs_outreach():
+                _log(
+                    self.ctx,
+                    draft.id,
+                    LogKind.POLICY,
+                    "no outreach needed: "
+                    + (
+                        f"duplicate of {draft.duplicate_of}"
+                        if draft.duplicate_of
+                        else "the message asks for nothing"
+                    ),
+                    duplicate_of=draft.duplicate_of,
+                    is_request=draft.is_request,
+                )
         elif event.node_id == "outreach":
             step = node_output(graph_state, "outreach", OutreachStep)
-            if step is not None and step.action == "accepted" and request.assigned_volunteer_id:
-                request.status = RequestStatus.CONFIRMED
-            elif request.status is RequestStatus.MATCHING:
-                request.status = RequestStatus.AWAITING_REPLY
+            if step is not None and step.action == "accepted" and draft.assigned_volunteer_id:
+                draft.status = RequestStatus.CONFIRMED
+            elif draft.status is RequestStatus.MATCHING:
+                draft.status = RequestStatus.AWAITING_REPLY
         elif event.node_id == "steward":
             result = node_output(graph_state, "steward", StewardResult)
-            if result is not None and result.outcome == "completed":
-                request.status = RequestStatus.COMPLETED
+            if result is not None and result.outcome in _STEWARD_CLOSING:
+                draft.status = _STEWARD_CLOSING[result.outcome]
 
-        request.touch(self.ctx.now())
-        self.ctx.store.put_request(request)
+        _save(self.ctx, draft.id, **_changed_fields(request, draft))
 
 
 # --------------------------------------------------------------------------------------
@@ -349,6 +394,21 @@ def build_graph(ctx: AppContext, session_id: str) -> Graph:
     settings = ctx.settings
     request_id = session_id
 
+    def should_match(state: GraphState) -> bool:
+        """Rank volunteers only when there is actually a job in the message."""
+        request = _request_of(ctx, request_id)
+        return request is None or request.needs_outreach()
+
+    def should_close_out(state: GraphState) -> bool:
+        """Hand straight to the steward when nobody needs to be asked anything.
+
+        A thank-you note, an update, or a second message chasing a job already in hand is still
+        worth a courteous reply — but no volunteer's phone should buzz for it, so intake skips
+        the matcher and outreach entirely and the steward closes it politely.
+        """
+        request = _request_of(ctx, request_id)
+        return request is not None and not request.needs_outreach()
+
     def should_outreach(state: GraphState) -> bool:
         """Move on to outreach unless the coordinator (or policy) halted the request."""
         request = _request_of(ctx, request_id)
@@ -385,7 +445,8 @@ def build_graph(ctx: AppContext, session_id: str) -> Graph:
     builder.add_node(make_outreach_agent(ctx), "outreach")
     builder.add_node(make_steward_agent(ctx), "steward")
 
-    builder.add_edge("intake", "matcher")
+    builder.add_edge("intake", "matcher", condition=should_match)
+    builder.add_edge("intake", "steward", condition=should_close_out)
     builder.add_edge("matcher", "outreach", condition=should_outreach)
     builder.add_edge("outreach", "matcher", condition=should_retry)
     builder.add_edge("outreach", "steward", condition=should_steward)
@@ -504,10 +565,7 @@ def _finish(ctx: AppContext, request_id: str, graph: Graph, result: Any, logs_be
     decisions = _decisions_for(ctx, graph, result, request_id, request) if interrupted else []
 
     if interrupted and request is not None and request.status not in HALTED_STATUSES:
-        request.status = RequestStatus.ESCALATED
-        request.touch(ctx.now())
-        ctx.store.put_request(request)
-        request = ctx.store.get_request(request_id)
+        request = _save(ctx, request_id, status=RequestStatus.ESCALATED) or request
 
     status = request.status if request else RequestStatus.NEW
     logs_after = len(ctx.store.list_log(request_id=request_id, limit=1000))
@@ -550,9 +608,7 @@ def run_request(ctx: AppContext, request_id: str, *, image_base64: str | None = 
 
     logs_before = len(ctx.store.list_log(request_id=request_id, limit=1000))
     if request.status in (RequestStatus.NEW,):
-        request.status = RequestStatus.TRIAGING
-        request.touch(ctx.now())
-        ctx.store.put_request(request)
+        _save(ctx, request_id, status=RequestStatus.TRIAGING)
 
     graph = build_graph(ctx, session_id=request_id)
     task = build_intake_task(request, image_base64)
@@ -668,9 +724,7 @@ def run_sweep(ctx: AppContext) -> SweepOutcome:
         )
         ctx.store.put_decision(decision)
         cards.append(decision)
-        request.status = RequestStatus.ESCALATED
-        request.touch(now)
-        ctx.store.put_request(request)
+        _save(ctx, request.id, status=RequestStatus.ESCALATED)
         escalated += 1
         _log(ctx, request.id, LogKind.DECISION, f"sweep escalated: {reason}", decision_id=decision.id)
 

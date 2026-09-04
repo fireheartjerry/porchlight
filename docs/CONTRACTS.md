@@ -34,6 +34,7 @@ mode: "demo" | "live" = "demo"
 model_provider: "bedrock" | "mock" = "bedrock"
 store: "sqlite" | "dynamo" = "sqlite"
 tools: "local" | "mcp" = "local"
+events_source: "memory" | "store" = "memory"   # "store" when API and agents are separate processes
 sqlite_path: str = "data/local/porchlight.db"
 session_dir: str = "data/sessions"
 session_bucket: str | None
@@ -43,6 +44,7 @@ aws_region: str = "us-west-2"         # falls back to AWS_REGION
 model_sonnet: str = "global.anthropic.claude-sonnet-4-6"
 model_haiku: str = "global.anthropic.claude-haiku-4-5-20251001-v1:0"
 agent_runtime_arn: str | None         # when API should call AgentCore instead of in-process
+from_addr: str = "porchlight@example.org"   # verified SES sender used by EmailChannel
 group_name: str = "Maple Street Mutual Aid"
 timezone: str = "America/Toronto"
 quiet_hours: tuple[int, int] = (21, 8)
@@ -58,6 +60,8 @@ Enums as `StrEnum`: `Category`, `Urgency`, `RequestStatus`, `Source`, `ReplyInte
 `DecisionStatus`, `LogKind`, `MessageStatus`, `Recipient` ("volunteer"|"requester"|"coordinator").
 Every model has `model_config = ConfigDict(extra="forbid")` except `LogEvent.detail: dict[str, Any]`.
 `AidRequest.attempts: list[Attempt]` where `Attempt(volunteer_id, sent_at, outcome: "pending"|"accepted"|"declined"|"counter"|"concern"|"timeout", note: str | None)`.
+`AidRequest` also carries `version: int` (optimistic concurrency, store-managed), `is_request: bool = True`, and
+`duplicate_of: str | None`; `AidRequest.needs_outreach()` is false for either of the last two.
 `Decision.options: list[DecisionOption(id, label, description)]`; option ids are short snake_case (`"approve"`, `"widen_pool"`, `"i_will_handle"`, `"decline_request"`, `"reschedule"`).
 
 ## 4. Store (`porchlight/store/base.py`) — `Protocol`
@@ -69,18 +73,26 @@ put_requester(r) / get_requester(id) / find_requester_by_contact(contact: str) -
 # requests
 put_request(req) / get_request(id) / list_requests(status: RequestStatus | None = None, limit=200) -> list (newest first)
 requests_for_volunteer(volunteer_id, since: datetime) -> list
+update_request_fields(request_id, *, expected_version: int | None = None, **fields) -> AidRequest | None  # atomic, bumps version
+append_attempt(request_id, attempt: Attempt) -> AidRequest | None            # appends, rewrites nothing else
+resolve_attempt(request_id, attempt: Attempt) -> AidRequest | None           # settles that volunteer's open ask
 # decisions
 put_decision(d) / get_decision(id) / list_decisions(status: DecisionStatus | None = None) -> list (newest first)
 # messages
 put_message(m) / list_messages(request_id=None, status=None, due_before: datetime | None = None) -> list
 # log
 append_log(e: LogEvent) / list_log(request_id=None, limit=200, since=None) -> list (newest first)
+# trace (persisted so a split deployment still has a live trace)
+append_trace(event: dict) -> int (cursor) / list_trace(since_cursor=0, limit=500, request_id=None) -> list (oldest first, each carrying "cursor")
 # settings
 get_group_settings() -> GroupSettings / put_group_settings(gs)
 # util
 reset() (wipe; tests/demo) / stats(day: date) -> dict(handled_autonomously:int, decisions_open:int, decisions_resolved:int, requests_by_status: dict)
 ```
 `SqliteStore(path)` (thread-safe, WAL, JSON columns; `":memory:"` allowed). `DynamoStore(table, region)` same API (single table; pk=`ENTITY#id`, sk=`ENTITY`, GSI1 by entity+status+created_at).
+Field-level writes are atomic in both: SQLite uses one `UPDATE ... WHERE id = ? AND version = ?` under the store lock; Dynamo uses
+`UpdateExpression` + `ConditionExpression version = :expected`, and `append_attempt` is a `list_append` on an `attempts` attribute.
+A lost race raises `porchlight.store.base.StaleVersionError`. Persisted trace items carry an `expires_at` epoch second for a DynamoDB TTL.
 
 ## 5. Channel (`porchlight/channels/base.py`) — `Protocol`
 ```
@@ -90,12 +102,13 @@ schedule(msg: OutboundMessage, when: datetime) -> OutboundMessage
 ```
 `SimChannel(store, clock, reply_fn: Callable[[Volunteer, AidRequest, str], str] | None)` — stores messages, and when a
 volunteer is messaged, produces a reply by calling `reply_fn` (the volunteer simulator agent) or scripted fixture replies
-(`porchlight/sim/fixtures.py: SCRIPTED_REPLIES`). `EmailChannel(ses_client_factory, from_addr, dry_run=True)`.
+(`porchlight/sim/fixtures.py: SCRIPTED_REPLIES`). `EmailChannel(ses_client_factory, from_addr, dry_run=True)`. `make_channel` returns `EmailChannel(dry_run=False)` in live mode **only** when `from_addr` differs from the `porchlight@example.org` placeholder; otherwise it warns and stays in dry-run, because SES rejects an unverified sender.
 
 ## 6. Tools (`porchlight/tools/`) — all `@tool(context=True)`, importable from `porchlight.tools`
 Return plain dicts/lists/str (JSON-serializable). Names are fixed:
 ```
 lookup_requester_history(contact_or_name: str) -> dict           # {requester: {...}|None, recent_requests: [...]}
+find_similar_open_requests(requester_id: str, category: str | None = None, window_hours: int = 72) -> list[dict]  # duplicate detection
 find_candidates(request_id: str, limit: int = 5) -> list[dict]     # [{volunteer_id, name, score, reasons: [..], load_this_week, zones, skills, memory_notes}]
 volunteer_load(volunteer_id: str) -> dict                          # {this_week: n, max_per_week: n, last_active: iso}
 recall_memory(query: str, about: str | None = None) -> list[dict]  # [{content, metadata}] from ctx.memory
@@ -149,6 +162,7 @@ POST /api/decisions/{id}/resolve    -> {option_id, note?} -> RunOutcome
 GET  /api/volunteers                -> [Volunteer + load]
 GET  /api/log?request_id=&limit=    -> [LogEvent]
 GET  /api/events                    -> SSE stream of trace events (text/event-stream)
+GET  /api/events/poll?since=&limit= -> {events: [TraceEvent + cursor], cursor} read from the persisted trace
 POST /api/demo/reset                -> reseed fixtures
 POST /api/demo/run_day              -> {count?: int} streams N sample requests through run_request (background task), progress via /api/events
 GET  /api/demo/samples              -> list of sample inbound messages (id, label, text, expected: "quiet"|"card")

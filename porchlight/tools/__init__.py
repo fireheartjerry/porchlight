@@ -14,7 +14,12 @@ Names, signatures, and the tool groups are fixed by ``docs/CONTRACTS.md`` §6.
 
 from __future__ import annotations
 
-from .intake import lookup_requester_history, lookup_requester_history_impl
+from .intake import (
+    find_similar_open_requests,
+    find_similar_open_requests_impl,
+    lookup_requester_history,
+    lookup_requester_history_impl,
+)
 from .matching import (
     find_candidates,
     find_candidates_impl,
@@ -63,6 +68,8 @@ __all__ = [
     "close_request_impl",
     "find_candidates",
     "find_candidates_impl",
+    "find_similar_open_requests",
+    "find_similar_open_requests_impl",
     "lookup_requester_history",
     "lookup_requester_history_impl",
     "query_log",
@@ -91,7 +98,7 @@ __all__ = [
 # Tool groups (per agent)
 # --------------------------------------------------------------------------------------
 
-INTAKE_TOOLS = [lookup_requester_history, update_request]
+INTAKE_TOOLS = [lookup_requester_history, find_similar_open_requests, update_request]
 MATCHER_TOOLS = [find_candidates, volunteer_load, recall_memory]
 OUTREACH_TOOLS = [send_message, read_replies, assign_volunteer, record_attempt, schedule_message]
 STEWARD_TOOLS = [send_message, schedule_message, remember, close_request, update_request]
@@ -99,6 +106,7 @@ BRIEF_TOOLS = [query_requests, query_log]
 
 ALL_TOOLS = [
     lookup_requester_history,
+    find_similar_open_requests,
     find_candidates,
     volunteer_load,
     recall_memory,
@@ -119,6 +127,7 @@ SIDE_EFFECT_TOOLS = [send_message, schedule_message, assign_volunteer, close_req
 
 READ_ONLY_TOOLS = [
     lookup_requester_history,
+    find_similar_open_requests,
     find_candidates,
     volunteer_load,
     recall_memory,

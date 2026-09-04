@@ -1,0 +1,80 @@
+{
+  "$schema": "https://schema.agentcore.aws.dev/v1/agentcore.json",
+  "name": "porchlight",
+  "version": 1,
+  "managedBy": "CDK",
+  "tags": {
+    "agentcore:created-by": "agentcore-cli",
+    "agentcore:project-name": "porchlight",
+    "project": "porchlight"
+  },
+  "runtimes": [
+    {
+      "name": "Porchlight",
+      "description": "Porchlight dispatcher: the Strands graph behind POST /invocations.",
+      "build": "CodeZip",
+      "entrypoint": "main.py",
+      "codeLocation": "runtime/",
+      "runtimeVersion": "PYTHON_3_14",
+      "networkMode": "PUBLIC",
+      "protocol": "HTTP",
+      "authorizerType": "AWS_IAM",
+      "instrumentation": {
+        "enableOtel": true
+      },
+      "lifecycleConfiguration": {
+        "idleRuntimeSessionTimeout": 900,
+        "maxLifetime": 28800
+      },
+      "envVars": [
+        { "name": "PORCHLIGHT_MODE", "value": "live" },
+        { "name": "PORCHLIGHT_MODEL_PROVIDER", "value": "bedrock" },
+        { "name": "PORCHLIGHT_STORE", "value": "dynamo" },
+        { "name": "PORCHLIGHT_TOOLS", "value": "local" },
+        { "name": "PORCHLIGHT_EVENTS_SOURCE", "value": "store" },
+        { "name": "PORCHLIGHT_DYNAMO_TABLE", "value": "porchlight" },
+        { "name": "PORCHLIGHT_SESSION_BUCKET", "value": "porchlight-sessions-123050168750-us-west-2" },
+        { "name": "PORCHLIGHT_AWS_REGION", "value": "us-west-2" },
+        { "name": "PORCHLIGHT_MODEL_SONNET", "value": "global.anthropic.claude-sonnet-4-6" },
+        { "name": "PORCHLIGHT_MODEL_HAIKU", "value": "global.anthropic.claude-haiku-4-5-20251001-v1:0" },
+        { "name": "PORCHLIGHT_GROUP_NAME", "value": "Maple Street Mutual Aid" },
+        { "name": "PORCHLIGHT_TIMEZONE", "value": "America/Toronto" },
+        { "name": "AGENT_OBSERVABILITY_ENABLED", "value": "true" },
+        { "name": "OTEL_PYTHON_DISTRO", "value": "aws_distro" },
+        { "name": "OTEL_PYTHON_CONFIGURATOR", "value": "aws_configurator" }
+      ],
+      "additionalPolicies": ["iam-policy.json"]
+    }
+  ],
+  "memories": [
+    {
+      "name": "PorchlightMemory",
+      "eventExpiryDuration": 90,
+      "strategies": [
+        {
+          "type": "USER_PREFERENCE",
+          "name": "PorchlightPreferences",
+          "description": "How each volunteer and neighbour likes to be helped.",
+          "namespaceTemplates": ["/porchlight/{actorId}/preferences"]
+        },
+        {
+          "type": "SEMANTIC",
+          "name": "PorchlightFacts",
+          "description": "Durable facts about a volunteer, a neighbour, or how a past job went.",
+          "namespaceTemplates": ["/porchlight/{actorId}/facts"]
+        }
+      ]
+    }
+  ],
+  "knowledgeBases": [],
+  "credentials": [],
+  "evaluators": [],
+  "onlineEvalConfigs": [],
+  "agentCoreGateways": [],
+  "policyEngines": [],
+  "configBundles": [],
+  "abTests": [],
+  "harnesses": [],
+  "datasets": [],
+  "payments": []
+}

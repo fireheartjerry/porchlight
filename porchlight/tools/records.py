@@ -41,15 +41,16 @@ def assign_volunteer_impl(
         return error(f"unknown volunteer {volunteer_id}")
 
     now = ctx.clock.now()
-    request.assigned_volunteer_id = volunteer_id
-    request.status = RequestStatus.CONFIRMED
-    matched = [a for a in request.attempts if a.volunteer_id == volunteer_id]
-    if matched:
-        matched[-1].outcome = "accepted"
-    else:
-        request.attempts.append(Attempt(volunteer_id=volunteer_id, sent_at=now, outcome="accepted"))
-    request.touch(now)
-    ctx.store.put_request(request)
+    # Two atomic writes rather than one whole-row rewrite: another thread recording an attempt
+    # or updating a different field at the same moment keeps its work.
+    ctx.store.resolve_attempt(request_id, Attempt(volunteer_id=volunteer_id, sent_at=now, outcome="accepted"))
+    updated = ctx.store.update_request_fields(
+        request_id,
+        assigned_volunteer_id=volunteer_id,
+        status=RequestStatus.CONFIRMED,
+        updated_at=now,
+    )
+    request = updated or request
 
     volunteer.stats.accepted += 1
     volunteer.stats.last_active = now
@@ -83,23 +84,16 @@ def record_attempt_impl(
         return error(f"unknown request {request_id}")
 
     now = ctx.clock.now()
-    pending = next(
-        (a for a in request.attempts if a.volunteer_id == volunteer_id and a.outcome == "pending"), None
+    settled = ctx.store.resolve_attempt(
+        request_id,
+        Attempt(
+            volunteer_id=volunteer_id,
+            sent_at=now,
+            outcome=outcome,  # type: ignore[arg-type]
+            note=note,
+        ),
     )
-    if pending is not None:
-        pending.outcome = outcome  # type: ignore[assignment]
-        pending.note = note
-    else:
-        request.attempts.append(
-            Attempt(
-                volunteer_id=volunteer_id,
-                sent_at=now,
-                outcome=outcome,  # type: ignore[arg-type]
-                note=note,
-            )
-        )
-    request.touch(now)
-    ctx.store.put_request(request)
+    request = ctx.store.update_request_fields(request_id, updated_at=now) or settled or request
 
     volunteer = ctx.store.get_volunteer(volunteer_id)
     if volunteer is not None and outcome == "declined":
@@ -140,15 +134,16 @@ def update_request_impl(
         return error(f"unknown field(s) {sorted(unknown)}; valid fields are {sorted(model_fields)}")
     if "id" in fields and fields["id"] != request.id:
         return error("a request's id cannot be changed")
+    # ``id`` and ``version`` are the store's to manage; a no-op restatement of either is dropped
+    # rather than rejected, so a model echoing the whole record back still succeeds.
+    writable = {key: value for key, value in fields.items() if key not in ("id", "version")}
 
-    payload = request.model_dump(mode="json")
-    payload.update(fields)
     try:
-        updated = type(request).model_validate(payload)
+        updated = ctx.store.update_request_fields(request_id, updated_at=ctx.clock.now(), **writable)
     except ValueError as exc:
         return error(f"invalid update: {exc}")
-    updated.touch(ctx.clock.now())
-    ctx.store.put_request(updated)
+    if updated is None:
+        return error(f"unknown request {request_id}")
     record(
         ctx,
         LogKind.TOOL_CALL,
@@ -176,9 +171,9 @@ def close_request_impl(
         return error(f"unknown request {request_id}")
 
     now = ctx.clock.now()
-    request.status = RequestStatus(outcome)
-    request.touch(now)
-    ctx.store.put_request(request)
+    request = (
+        ctx.store.update_request_fields(request_id, status=RequestStatus(outcome), updated_at=now) or request
+    )
 
     if outcome == "completed" and request.assigned_volunteer_id:
         volunteer = ctx.store.get_volunteer(request.assigned_volunteer_id)

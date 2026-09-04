@@ -12,7 +12,7 @@ from strands_tools import current_time
 
 from ..context import AppContext
 from ..models import AidRequest
-from ..tools import lookup_requester_history
+from ..tools import find_similar_open_requests, lookup_requester_history
 from .base import build_agent
 from .outputs import IntakeResult
 from .prompts import intake_prompt
@@ -32,7 +32,7 @@ def make_intake_agent(ctx: AppContext) -> Agent:
         ctx,
         name="intake",
         system_prompt=intake_prompt(ctx.settings),
-        tools=[current_time, lookup_requester_history],
+        tools=[current_time, lookup_requester_history, find_similar_open_requests],
         output_model=IntakeResult,
         tier="haiku",
         description="Turns an inbound message into a structured aid request.",

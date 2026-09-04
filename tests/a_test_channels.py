@@ -34,8 +34,17 @@ def test_both_channels_satisfy_the_protocol(store, clock):
 def test_make_channel_picks_sim_in_demo_and_email_in_live(store, clock):
     demo = make_channel(Settings(mode="demo", sqlite_path=":memory:"), store, clock)
     assert isinstance(demo, SimChannel)
-    live = make_channel(Settings(mode="live", sqlite_path=":memory:"), store, clock)
+    settings = Settings(mode="live", sqlite_path=":memory:", from_addr="porch@maplestreet.org")
+    live = make_channel(settings, store, clock)
     assert isinstance(live, EmailChannel) and live.dry_run is False
+
+
+def test_live_mode_logs_instead_of_sending_from_the_placeholder_address(store, clock):
+    """SES rejects an unverified sender, so a placeholder from-address must not go live."""
+    live = make_channel(Settings(mode="live", sqlite_path=":memory:"), store, clock)
+    assert isinstance(live, EmailChannel)
+    assert live.from_addr == "porchlight@example.org"
+    assert live.dry_run is True
 
 
 # --- SimChannel -----------------------------------------------------------------------

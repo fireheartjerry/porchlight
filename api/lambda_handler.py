@@ -1,9 +1,19 @@
-"""AWS Lambda entry point: the same FastAPI app behind a Function URL.
+"""AWS Lambda entry point: the same FastAPI app behind a Function URL — the *buffered* one.
 
-Lambda has no lifespan story worth relying on (``lifespan="off"``), so the context and the
-orchestrator are built on the first request and cached for the life of the execution
-environment. Nothing here touches AWS at import time, which keeps cold starts honest and
-lets the module be imported in tests.
+The deployed path (``infra/``) is different and better: the AWS Lambda Web Adapter layer runs a
+real uvicorn process from ``run.sh`` and streams the Function URL response, which is what makes
+``/api/events`` (SSE) arrive as it happens rather than all at once at the end.
+
+This module is the alternative: point the function's handler at ``api.lambda_handler.handler``,
+drop the layer and the ``AWS_LWA_*`` variables, and the same app runs through Mangum. Useful when
+debugging the adapter, and as a fallback if the layer is unavailable in a region. Two caveats:
+responses are buffered (no streaming, so an SSE client sees nothing until the stream ends), and
+the ASGI lifespan never runs (``lifespan="off"``) — so the store-backed trace tailer that
+``events_source="store"`` relies on never starts either.
+
+Because there is no lifespan, the context and the orchestrator are built on the first request and
+cached for the life of the execution environment. Nothing here touches AWS at import time, which
+keeps cold starts honest and lets the module be imported in tests.
 """
 
 from __future__ import annotations

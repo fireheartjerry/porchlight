@@ -313,11 +313,20 @@ class AidRequest(_Base):
     money_involved: bool = False
     safety_flags: list[str] = Field(default_factory=list)
     first_time_requester: bool = False
+    is_request: bool = Field(
+        default=True, description="False when the message asks for nothing (thanks, spam, chatter)"
+    )
+    duplicate_of: str | None = Field(
+        default=None, description="Id of the open request this one repeats, when it is a duplicate"
+    )
     status: RequestStatus = RequestStatus.NEW
     assigned_volunteer_id: str | None = None
     attempts: list[Attempt] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow)
+    version: int = Field(
+        default=0, ge=0, description="Optimistic-concurrency counter; bumped by every atomic write"
+    )
 
     def is_open(self) -> bool:
         """True while the request still needs work (not completed/declined/cancelled)."""
@@ -338,6 +347,10 @@ class AidRequest(_Base):
     def touch(self, now: datetime | None = None) -> None:
         """Set ``updated_at`` (defaults to now)."""
         self.updated_at = now or utcnow()
+
+    def needs_outreach(self) -> bool:
+        """False when this message asks for nothing, or just repeats a request already in hand."""
+        return self.is_request and not self.duplicate_of
 
 
 class MatchCandidate(_Base):
