@@ -20,3 +20,4 @@ coverage/
 .coverage
 htmlcov/
 media/raw/
+porchlight.egg-info/

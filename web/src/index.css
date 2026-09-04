@@ -1,0 +1,285 @@
+@import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght,SOFT,WONK@9..144,300..800,0..100,0..1&family=Inter:wght@300;400;500;600;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --porch-950: #070b15;
+    --porch-900: #0b1020;
+    --porch-800: #141a33;
+    --porch-700: #1f2747;
+    --lamp: #f59e0b;
+    --lamp-glow: #ffb347;
+    --lamp-wash: #ffd9a0;
+    --cream: #f4efe6;
+    --cream-dim: #cbc4b8;
+    --sage: #8fb996;
+    --ember: #ff6b6b;
+    --lilac: #b39ddb;
+    --dusk: #7fa9d8;
+    --rust: #f0894a;
+    --slate: #8d95ab;
+
+    /* How strong the porch light burns. Raised while a decision is open. */
+    --lamp-strength: 0.1;
+
+    --rail: 15.5rem;
+    --header: 4.5rem;
+
+    color-scheme: dark;
+  }
+
+  html {
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    margin: 0;
+    min-height: 100dvh;
+    background-color: var(--porch-900);
+    color: var(--cream);
+    font-family: theme('fontFamily.sans');
+    font-size: 15px;
+    line-height: 1.55;
+    font-feature-settings: 'cv02', 'cv03', 'cv04', 'ss01';
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+    overscroll-behavior-y: none;
+  }
+
+  /* The night itself: a cool gradient, a warm pool of light from the top-left,
+     a soft second lamp far right, and a vignette that closes the street off. */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    z-index: -2;
+    pointer-events: none;
+    background:
+      radial-gradient(
+        58rem 40rem at 12% -6%,
+        rgba(255, 179, 71, calc(0.1 + var(--lamp-strength) * 0.3)),
+        transparent 62%
+      ),
+      radial-gradient(38rem 30rem at 104% 8%, rgba(127, 169, 216, 0.1), transparent 60%),
+      radial-gradient(70rem 50rem at 50% 118%, rgba(20, 26, 51, 0.9), transparent 70%),
+      linear-gradient(168deg, #0b1020 0%, #101731 46%, #0a0f1e 100%);
+    transition: background 900ms ease;
+  }
+
+  /* Film grain + vignette. Cheap, static, and it stops the flats from looking plastic. */
+  body::after {
+    content: '';
+    position: fixed;
+    inset: -30%;
+    z-index: -1;
+    pointer-events: none;
+    opacity: 0.4;
+    background-image:
+      radial-gradient(120% 100% at 50% 45%, transparent 52%, rgba(3, 6, 14, 0.72) 100%),
+      url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.82' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='180' height='180' filter='url(%23n)' opacity='0.42'/%3E%3C/svg%3E");
+    background-size:
+      100% 100%,
+      180px 180px;
+    mix-blend-mode: soft-light;
+    animation: drift 26s ease-in-out infinite;
+  }
+
+  h1,
+  h2,
+  h3,
+  h4 {
+    font-family: theme('fontFamily.display');
+    font-variation-settings: 'SOFT' 28, 'WONK' 1;
+    font-weight: 500;
+    letter-spacing: -0.012em;
+    line-height: 1.12;
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--lamp-glow);
+    outline-offset: 2px;
+    border-radius: 6px;
+  }
+
+  /* Never a bare browser ring on a dark ground. */
+  button,
+  a,
+  input,
+  select,
+  textarea {
+    outline-color: var(--lamp-glow);
+  }
+
+  ::selection {
+    background: rgba(245, 158, 11, 0.28);
+    color: var(--cream);
+  }
+
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: rgba(244, 239, 230, 0.12);
+    border: 3px solid transparent;
+    background-clip: content-box;
+    border-radius: 99px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: rgba(244, 239, 230, 0.22);
+    background-clip: content-box;
+  }
+}
+
+@layer components {
+  /* A card is a lit surface: light catches the top edge, the body stays in shadow. */
+  .porch-card {
+    @apply relative rounded-2xl border border-white/[0.07] bg-white/[0.028] shadow-lift backdrop-blur-[2px];
+  }
+  .porch-card::before {
+    content: '';
+    position: absolute;
+    inset: 0 0 auto 0;
+    height: 1px;
+    border-radius: inherit;
+    background: linear-gradient(90deg, transparent, rgba(255, 217, 160, 0.35), transparent);
+    pointer-events: none;
+  }
+
+  .porch-hairline {
+    @apply border-b border-white/[0.06];
+  }
+
+  .porch-scroll {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(244, 239, 230, 0.16) transparent;
+  }
+
+  .tabnum {
+    font-variant-numeric: tabular-nums;
+  }
+
+  .display-xl {
+    font-family: theme('fontFamily.display');
+    font-variation-settings: 'opsz' 96, 'SOFT' 40, 'WONK' 1;
+  }
+}
+
+@layer utilities {
+  .text-balance {
+    text-wrap: balance;
+  }
+  .text-pretty {
+    text-wrap: pretty;
+  }
+  .stagger > * {
+    animation: fade-up 520ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+  .stagger > *:nth-child(1) {
+    animation-delay: 40ms;
+  }
+  .stagger > *:nth-child(2) {
+    animation-delay: 100ms;
+  }
+  .stagger > *:nth-child(3) {
+    animation-delay: 160ms;
+  }
+  .stagger > *:nth-child(4) {
+    animation-delay: 220ms;
+  }
+  .stagger > *:nth-child(5) {
+    animation-delay: 280ms;
+  }
+  .stagger > *:nth-child(6) {
+    animation-delay: 340ms;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* Raw keyframes so CSS written by hand (body grain, .stagger) never depends on a
+   Tailwind animate-* utility being present somewhere in the tree. */
+@keyframes drift {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0);
+  }
+  50% {
+    transform: translate3d(-1.5%, 1.5%, 0);
+  }
+}
+
+@keyframes fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes slide-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes lantern-glow {
+  0%,
+  100% {
+    opacity: 0.72;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.06);
+  }
+}
+
+@keyframes flicker {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  41% {
+    opacity: 0.86;
+  }
+  43% {
+    opacity: 1;
+  }
+  77% {
+    opacity: 0.92;
+  }
+}
+
+@keyframes pulse-dot {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(143, 185, 150, 0.55);
+  }
+  70% {
+    box-shadow: 0 0 0 7px rgba(143, 185, 150, 0);
+  }
+}

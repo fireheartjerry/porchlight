@@ -73,7 +73,8 @@ with Diagram(
     intake >> Edge(label="AidRequest") >> matcher
     matcher >> Edge(label="MatchPlan") >> outreach
     outreach >> Edge(label="accepted") >> steward
-    outreach >> Edge(label="Strands intervention → interrupt\n= Decision Card", color=AMBER, style="bold") >> api
+    card_label = "Strands intervention → interrupt\n= Decision Card"
+    outreach >> Edge(label=card_label, color=AMBER, style="bold") >> api
     matcher >> Edge(style="dashed", label="recall") >> memory
     steward >> Edge(label="remember") >> memory
     steward >> obs
