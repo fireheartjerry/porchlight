@@ -13,7 +13,9 @@ const AXE = require.resolve('axe-core/axe.min.js')
 const BASE = process.env.BASE ?? 'http://localhost:5173'
 
 const browser = await chromium.launch()
-const page = await browser.newPage({ viewport: { width: 1440, height: 900 } })
+// Reduced motion pins every element at its final opacity, so axe never reads a
+// contrast ratio off a row that is still fading in (and it exercises that path).
+const page = await browser.newPage({ viewport: { width: 1440, height: 900 }, reducedMotion: 'reduce' })
 let problems = 0
 
 async function audit(label) {

@@ -19,7 +19,7 @@ export function TraceRow({ event }: { event: TraceEvent }) {
   return (
     <li
       data-testid="trace-row"
-      className="animate-slide-in border-l-2 pl-2"
+      className="animate-trace-in border-l-2 pl-2"
       style={{ borderColor: rail ? `rgba(${rail},0.42)` : 'transparent' }}
     >
       <button

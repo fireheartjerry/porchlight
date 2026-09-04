@@ -30,4 +30,16 @@ export default tseslint.config(
     extends: [js.configs.recommended],
     languageOptions: { globals: globals.node, sourceType: 'module' },
   },
+  {
+    // Playwright harnesses: Node scripts whose page.evaluate() bodies run in the browser.
+    files: ['scripts/**/*.mjs'],
+    extends: [js.configs.recommended],
+    languageOptions: {
+      globals: { ...globals.node, ...globals.browser },
+      sourceType: 'module',
+    },
+    rules: {
+      'no-unused-vars': ['error', { argsIgnorePattern: '^_', varsIgnorePattern: '^_' }],
+    },
+  },
 )

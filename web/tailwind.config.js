@@ -61,6 +61,12 @@ export default {
           from: { opacity: '0', transform: 'translateY(6px)' },
           to: { opacity: '1', transform: 'translateY(0)' },
         },
+        // The trace is a firehose: lines land almost instantly and never sit
+        // fully transparent, so the newest ones stay readable as they arrive.
+        'trace-in': {
+          from: { opacity: '0.35', transform: 'translateY(3px)' },
+          to: { opacity: '1', transform: 'translateY(0)' },
+        },
         'fade-up': {
           from: { opacity: '0', transform: 'translateY(14px)' },
           to: { opacity: '1', transform: 'translateY(0)' },
@@ -78,6 +84,7 @@ export default {
         'lantern-glow': 'lantern-glow 3.6s ease-in-out infinite',
         flicker: 'flicker 5s linear infinite',
         'slide-in': 'slide-in 320ms cubic-bezier(0.22,1,0.36,1) both',
+        'trace-in': 'trace-in 130ms ease-out both',
         'fade-up': 'fade-up 520ms cubic-bezier(0.22,1,0.36,1) both',
         'pulse-dot': 'pulse-dot 2.4s ease-out infinite',
         drift: 'drift 26s ease-in-out infinite',
