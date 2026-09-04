@@ -12,7 +12,8 @@ import clsx from 'clsx'
 import { ChevronDown, Layers } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { clockTime, humanise, pluralise, relativeTime } from '../../lib/format'
-import { agentTone, CATEGORY_ICONS, LOG_KIND_LABELS, STATUS_LABELS, STATUS_TONES } from '../../lib/kinds'
+import { CategoryGlyph } from '../CategoryGlyph'
+import { agentTone, LOG_KIND_LABELS, STATUS_LABELS, STATUS_TONES } from '../../lib/kinds'
 import type { AidRequest, LogEvent } from '../../types'
 import { Badge } from '../Badge'
 import { EmptyState } from '../EmptyState'
@@ -159,7 +160,6 @@ export function QuietLog({ events, requests }: { events: LogEvent[]; requests: A
 function RequestThread({ group, defaultOpen }: { group: Group; defaultOpen: boolean }) {
   const [open, setOpen] = useState(defaultOpen)
   const { request } = group
-  const Icon = request ? CATEGORY_ICONS[request.category] : Layers
   const needsYou = group.events.some((event) => !event.autonomous)
   const title = request?.summary ?? (group.key === '__loose__' ? 'Housekeeping' : group.key)
 
@@ -179,7 +179,7 @@ function RequestThread({ group, defaultOpen }: { group: Group; defaultOpen: bool
               : 'border-white/[0.08] bg-white/[0.03] text-cream-faint',
           )}
         >
-          <Icon className="h-4 w-4" aria-hidden />
+          <CategoryGlyph category={request?.category} fallback="layers" className="h-4 w-4" />
         </span>
 
         <span className="min-w-0 flex-1">

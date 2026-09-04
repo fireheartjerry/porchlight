@@ -6,7 +6,8 @@
 
 import clsx from 'clsx'
 import { initials, firstName, formatWindow, formatWindowShort, relativeTime } from '../../lib/format'
-import { ATTEMPT_TONES, CATEGORY_ICONS } from '../../lib/kinds'
+import { CategoryGlyph } from '../CategoryGlyph'
+import { ATTEMPT_TONES } from '../../lib/kinds'
 import type { AidRequest, VolunteerWithLoad } from '../../types'
 import { sourceMeta } from './sources'
 
@@ -19,7 +20,6 @@ interface RequestCardProps {
 }
 
 export function RequestCard({ request, volunteer, selected, onOpen, onPrefetch }: RequestCardProps) {
-  const Icon = CATEGORY_ICONS[request.category] ?? CATEGORY_ICONS.other
   const SourceIcon = sourceMeta(request.source).icon
   const urgent = request.urgency === 'high' || request.urgency === 'emergency'
   const flagged = request.safety_flags.length > 0
@@ -53,7 +53,7 @@ export function RequestCard({ request, volunteer, selected, onOpen, onPrefetch }
                 : 'border-white/[0.08] bg-white/[0.04] text-cream-dim group-hover:text-cream',
           )}
         >
-          <Icon className="h-3.5 w-3.5" aria-hidden />
+          <CategoryGlyph category={request.category} className="h-3.5 w-3.5" />
         </span>
         <div className="min-w-0 flex-1">
           <p className="text-pretty font-display text-[0.9rem] leading-snug text-cream">{request.summary}</p>

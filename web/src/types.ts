@@ -13,12 +13,15 @@ export type Category =
   | 'ride'
   | 'groceries'
   | 'meal'
-  | 'errand'
-  | 'chore'
-  | 'tech'
+  | 'prescription'
+  | 'yard_work'
+  | 'tech_help'
+  | 'translation'
   | 'companionship'
   | 'childcare'
-  | 'translate'
+  | 'errand'
+  | 'repair'
+  | 'paperwork'
   | 'other'
 
 export type Urgency = 'low' | 'normal' | 'high' | 'emergency'
@@ -45,7 +48,7 @@ export type DecisionStatus = 'open' | 'resolved'
 
 export type LogKind = 'tool_call' | 'message_sent' | 'decision' | 'memory' | 'policy' | 'model'
 
-export type MessageStatus = 'queued' | 'scheduled' | 'sent' | 'delivered' | 'failed'
+export type MessageStatus = 'draft' | 'scheduled' | 'sent' | 'delivered' | 'failed' | 'cancelled'
 
 export type Recipient = 'volunteer' | 'requester' | 'coordinator'
 

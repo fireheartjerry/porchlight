@@ -84,13 +84,21 @@ export const CATEGORY_ICONS: Record<Category, LucideIcon> = {
   ride: Car,
   groceries: ShoppingBasket,
   meal: UtensilsCrossed,
-  errand: Package,
-  chore: Wrench,
-  tech: Laptop,
+  prescription: Package,
+  yard_work: Wrench,
+  tech_help: Laptop,
+  translation: Languages,
   companionship: HeartHandshake,
   childcare: Baby,
-  translate: Languages,
+  errand: Package,
+  repair: Wrench,
+  paperwork: Package,
   other: Package,
+}
+
+/** Defensive lookup: unknown categories (older data, future enum values) fall back to a neutral icon. */
+export function categoryIcon(category: string | null | undefined): LucideIcon {
+  return (category && (CATEGORY_ICONS as Record<string, LucideIcon>)[category]) || Package
 }
 
 /** Agent chips in the Quiet Log — each agent gets its own hue. */
