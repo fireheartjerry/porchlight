@@ -9,7 +9,7 @@
  */
 
 import clsx from 'clsx'
-import { ChevronDown, Layers } from 'lucide-react'
+import { ChevronDown } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { clockTime, humanise, pluralise, relativeTime } from '../../lib/format'
 import { CategoryGlyph } from '../CategoryGlyph'
