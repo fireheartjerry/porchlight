@@ -194,6 +194,8 @@ export interface LogEvent {
   summary: string
   detail: Record<string, unknown>
   autonomous: boolean
+  /** False for bookkeeping (lookups, reads); the porch hides these by default. */
+  visible: boolean
 }
 
 export interface OutboundMessage {

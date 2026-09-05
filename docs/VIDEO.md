@@ -1,31 +1,95 @@
-# Porchlight — demo video (≤ 5:00, target 4:30)
+# Porchlight — demo video
 
-Format: 1920×1080, 30 fps. Screen capture of The Porch (Playwright screencast, 1440×900 scaled up with a
-soft shadow on the night-blue background) + a few full-frame title cards. Voiceover: warm, unhurried
-(Polly "Matthew" neural / long-form if AWS is available, else macOS premium voice). Light ambient bed,
--24 LUFS. Captions burned in (short lines, bottom center) for accessibility and for judges watching muted.
+`make video` → `media/out/porchlight-demo.mp4` (1920×1080, 30 fps, h264 + aac, **4:14**, limit 5:00) and
+`media/out/thumbnail.png` (1920×1280, 3:2, for Devpost). Everything else under `media/out/` is a
+regenerable intermediate and is gitignored; the thumbnail is the one file kept in the repo.
 
-Judges must hear, explicitly: (1) the problem, (2) who it is for, (3) why it matters, and see the whole
-thing work end-to-end. Every claim below is shown on screen, not just said.
+Everything in the film is the real application: a FastAPI app on `:8000` with `PORCHLIGHT_MODEL_PROVIDER=mock`,
+the real React UI on `:5173`, driven by Playwright. Nothing is mocked for the camera and no frame is drawn by
+hand. No AWS credentials are needed to produce it.
 
-| # | Time | Shot | Narration (VO) |
-|---|------|------|----------------|
-| 1 | 0:00–0:20 | Title card: lantern dim → glows. "Porchlight — runs the coordination, lights up only when you're needed." | Every mutual-aid group, food pantry and volunteer team runs on one exhausted coordinator. Requests come in by text, email, forms and paper slips — and every one of them turns into the same job: figure out who can help, ask three people, wait, ask two more, confirm, remind, follow up. Forty times a week. |
-| 2 | 0:20–0:40 | Card: "Good Neighbor Agents" + persona line. Cut to The Porch, Porch screen, lantern dim, "All quiet". | This is Porchlight, our entry for the Good Neighbor track. It's an autonomous dispatcher for neighborhood groups. It does the whole loop in the background and makes the safe calls itself. It only turns the porch light on when a real decision needs a human. |
-| 3 | 0:40–1:40 | Inbox: paste "Hi, my mom needs a ride to dialysis Thursday 7am, Riverside, she uses a walker". Send. Trace drawer open on the right: intake → matcher → outreach; volunteer sim replies; first declines, second accepts; steward confirms. Quiet Log fills in. Requests board shows card moving to Confirmed. | Here's a request exactly as it arrives. Watch the trace. The intake agent turns it into a structured job — category, time window, zone, the walker constraint. The matcher scores volunteers on skills, distance, availability, and fairness, and recalls long-term memory: "Maria did great with Mrs. Okafor last month." Outreach messages Maria first — she's busy — so it moves to Dev, who says yes. The steward confirms with the family and schedules a reminder. Nobody had to touch it. It shows up in the Quiet Log, with the reasoning, in plain English. |
-| 4 | 1:40–2:35 | Inbox: paste "my neighbor's 6 year old is home alone and I can smell gas". Lantern turns on. Porch shows a red Decision Card: context, recommendation ("Call the requester now and advise 911; Porchlight has paused all outreach"), options. Tap "I'll handle it". Card resolves; log shows "resumed". | Now a different message. The intake agent flags it; the policy layer stops everything. This is the whole idea: Porchlight's autonomy boundary is explicit code — a Strands intervention that returns Confirm, which raises an interrupt. That interrupt *is* the Decision Card. It's persisted, so the coordinator can answer hours later from her phone, and the agent graph resumes exactly where it paused. Safety, money, vetting a new requester, an urgent job nobody can cover — those come to a human. Everything else stays quiet. |
-| 5 | 2:35–3:20 | Inbox: "Run a Tuesday". Progress bar; requests stream through; counters climb: "17 handled quietly · 3 need you". Quick scroll of Quiet Log. Volunteers screen: load bars balanced, memory notes. | Here's a whole Tuesday. Twenty requests. Seventeen handled without anyone. Three surfaced: a request for help paying a power bill, a first-time requester asking for in-home help, and a same-day ride nobody could take — each with options, not homework. And look at the volunteers: the load is spread, and the memory notes keep growing, so next week's matches are better than this week's. |
-| 6 | 3:20–4:05 | Architecture card (docs/architecture.png), then code flashes: `policy.py` (Confirm/Deny/Guide/Transform), `graph.py` (GraphBuilder, conditional edges), `runtime.py` (BedrockAgentCoreApp), AgentCore console: runtime, memory, observability trace. | Under the hood it's Strands Agents end to end: five agents with structured outputs, orchestrated as a Strands Graph with conditional edges and a bounded retry loop; interventions for policy; hooks for the audit trail; MCP for the data tools; a MemoryManager backed by AgentCore Memory. It runs on Amazon Bedrock AgentCore Runtime, with AgentCore Observability traces in CloudWatch, Claude Sonnet and Haiku on Bedrock, and an EventBridge sweep that does follow-ups and escalations while everyone sleeps. |
-| 7 | 4:05–4:30 | Closing card: lantern, repo URL, "Try it: <live demo URL>". | Coordinators don't quit because the work is hard. They quit because it never stops. Porchlight gives them back their evenings and keeps the important decisions human. Porchlight: it runs the coordination, and lights up only when you're needed. |
+Judges must hear, explicitly: (1) the problem, (2) who it is for, (3) why it matters, and see the whole thing
+work end to end. Every claim in the narration is on screen while it is said.
 
-## Production pipeline (`media/`)
-1. `media/record.mjs` — Playwright script that drives the real app (API in mock or Bedrock mode) through shots 2–5,
-   using `page.video` (1440×900) with deliberate pauses; it also captures shot 6 code close-ups by rendering
-   highlighted snippets as HTML.
-2. `media/cards/*.html` — title cards rendered with Playwright to PNG (1920×1080).
-3. `media/narration.json` — per-shot VO text; `media/tts.py` synthesizes per-shot audio (Polly neural
-   `Matthew`, `engine=long-form` if available, else `say -v "Ava (Premium)"`), reports durations.
-4. `media/assemble.py` — ffmpeg: scale/pad each clip to 1920×1080, trim to VO length (+0.6 s tail), concat,
-   overlay captions (drawtext from narration.json), mix VO + bed, export `media/out/porchlight-demo.mp4`
-   and a `thumbnail.png` (3:2 crop for Devpost).
-5. Upload to YouTube (public/unlisted-public) — done by the user or via the YouTube tab in Chrome.
+## Running order
+
+Times are measured, not planned: each shot is exactly as long as its voiceover plus a 0.6 s tail.
+
+| # | Time | Shot | Picture | What is said |
+|---|------|------|---------|--------------|
+| 1 | 0:00–0:32 | `01-title` | Title card: lantern lit, wordmark, tagline | Every group runs on one exhausted coordinator; every request becomes the same job, forty times a week, after her own work day. That is why coordinators burn out and good groups fold. |
+| 2 | 0:32–0:45 | `02-track` | Track card: "Good Neighbor Agents" + persona | Porchlight, our Good Neighbor track entry: an autonomous dispatcher that does the coordinator's job for her. |
+| 3 | 0:45–0:59 | `03-porch-quiet` | The Porch, lantern dim, "All quiet" | It runs the loop in the background and makes the safe calls itself. It only lights up when a decision needs a person. |
+| 4 | 0:59–1:41 | `04-dialysis` | Inbox → typed request → send → Trace drawer read top to bottom → Quiet Log | Intake structures the message; the matcher scores on skills, distance, availability, fairness and memory; outreach writes and waits, and would work down the shortlist on a refusal; the steward confirms and schedules the reminder. Nobody touched it. |
+| 5 | 1:41–2:24 | `05-safety` | "child home alone… smell gas" → lantern on → red Decision Card → "I'll handle this" → resumed | The policy layer stops everything before a volunteer is contacted. The autonomy boundary is explicit code: a Strands intervention returning `Confirm`, which raises an interrupt — and that interrupt *is* the Decision Card. Persisted, answerable hours later, resumes where it paused. |
+| 6 | 2:24–2:48 | `06-tuesday` | "Run a Tuesday" (12) → progress → Porch counters → Volunteers roster | Twelve requests start to finish; nine handled without anyone, three surfaced with options attached. The load is spread and the memory notes keep growing. |
+| 7 | 2:48–3:08 | `07-architecture` | `docs/architecture.png`, pushing in on the AgentCore half | Strands Agents end to end: five agents with structured outputs, a Graph with conditional edges and a bounded retry loop, hooks for the audit trail, MCP for the data tools, a memory manager. |
+| 8 | 3:08–3:24 | `08-code-policy` | `porchlight/policy.py` — `before_tool_call` | Before every tool call the policy intervention decides: allow, guide, rewrite, or stop and ask. |
+| 9 | 3:24–3:37 | `09-code-graph` | `porchlight/graph.py` — `GraphBuilder` | A node per agent, conditional edges on what the last agent returned, a retry loop that widens the pool. |
+| 10 | 3:37–3:56 | `10-code-runtime` | `porchlight/runtime.py` — `BedrockAgentCoreApp` | AgentCore Runtime, AgentCore Memory, Observability in CloudWatch, Sonnet and Haiku on Bedrock, an EventBridge sweep overnight. |
+| 11 | 3:56–4:14 | `11-closing` | Closing card: lantern, repo URL, "Live demo: see README" | Coordinators quit because it never stops. Porchlight gives them their evenings back and keeps the decisions that matter human. |
+
+The exact spoken text lives in [`media/narration.json`](../media/narration.json) — that file is the single source
+of truth for what is said, how long each shot is, and what the burned-in captions read.
+
+## Producing it
+
+```bash
+make video          # ~6 minutes, cold, on a laptop
+```
+
+It starts the API and the UI, produces everything, and stops the servers again (even on Ctrl-C). Ports are
+`MEDIA_API_PORT`/`MEDIA_WEB_PORT` if 8000/5173 are busy. Output lands in `media/out/` (gitignored).
+
+The steps, in the order the target runs them:
+
+1. **`media/tts.py`** — synthesizes one WAV per shot with macOS `say -v Samantha -r 175` and writes
+   `media/out/vo/durations.json`. `--engine polly` is a drop-in for Amazon Polly (`Matthew`, `long-form` with a
+   `neural` fallback) when AWS credentials exist; nothing downstream knows which one spoke.
+   *This runs first on purpose*: the recorder and the cutter both take their clock from the measured voiceover,
+   so speeding a line up or rewriting it re-times the picture automatically.
+2. **`media/record.mjs`** — Playwright drives the real UI through shots 3–6 and records one `.webm` per shot at
+   1440×900, starting from `POST /api/demo/reset`. Each shot is paced by a metronome expressed in *fractions of
+   its own narration* (`pace.until(0.62)` = "hold here until the narrator is 62% through"), so the picture stays
+   in step with the words. It also writes `media/out/clips.json` with the head-trim for each file.
+3. **`media/render-cards.mjs`** — renders `media/cards/*.html` to PNG at 2× (3840×2160; the thumbnail at
+   3840×2560). Those are the four title cards, the 3:2 thumbnail, and `05-frame` — the night-blue plate with the
+   real CSS drop shadow that the screen recordings are composited onto.
+4. **`media/code-cards.mjs`** — renders the three code close-ups. The snippets are *line ranges into the real
+   source files*, each with an anchor string; if a range stops matching, the build fails rather than filming a
+   stale screenshot.
+5. **`media/assemble.py`** — cuts the film. Each shot becomes one 1920×1080 MP4 the exact length of its
+   voiceover plus 0.6 s: a screencast is composited onto the plate at its native 1440×900 (no resampling at all,
+   which is the crispest the UI type can be), freezing its last frame if it ran short; a still card gets a slow
+   Ken Burns push cropped out of the 2× render, so the move only ever spends supersampling it already had.
+   Captions are transparent PNGs overlaid on `enable=between(t,…)` windows. The shots are concatenated with
+   `-c copy`, so the whole film is encoded exactly once (h264, crf 20, yuv420p). The voiceover is padded per
+   shot, concatenated, normalized to −16 LUFS and faded. It prints the running order and **fails if the result
+   is over 5:00**.
+
+Two of those steps look unusual and are deliberate:
+
+- **Captions are PNGs, not `drawtext`.** The ffmpeg in Homebrew is built without libfreetype, so `drawtext` and
+  `subtitles` do not exist. Laying the type out in a browser (`media/captions.mjs`) is the better half of that
+  trade anyway: real Inter, real kerning, real line breaking, and the same scrim treatment the app uses. The
+  splitter breaks the narration into sentences and halves any sentence over 112 characters, so nothing ever runs
+  past two lines.
+- **The recording group's quiet hours are moved** (`PORCHLIGHT_QUIET_HOURS=[3,4]`, set only by the `video`
+  target). After 21:00 the group's real policy holds outreach until morning — a good feature and a terrible
+  forty-second story: the narration says "someone says yes" over a screen that would say "held until 8am", and
+  which of the two you filmed would depend on what time you pressed `make`. Everything else is stock.
+
+## Checking it
+
+`media/assemble.py` already refuses to finish over 5:00. To check that the picture says what the narrator says:
+
+```bash
+ffmpeg -ss 79 -i media/out/porchlight-demo.mp4 -frames:v 1 media/out/frames/at-79s.png
+```
+
+`media/out/frames/` holds eight evenly spaced frames from the last verified cut.
+
+## Publishing
+
+Upload `media/out/porchlight-demo.mp4` to YouTube (public or unlisted-public) and use
+`media/out/thumbnail.png` as the Devpost image and the video thumbnail.

@@ -172,12 +172,12 @@ def test_coerces_sweep_outcomes() -> None:
 # --------------------------------------------------------------------------------------
 
 
-ARN = "arn:aws:bedrock-agentcore:us-west-2:123456789012:runtime/porchlight-abc"
+ARN = "arn:aws:bedrock-agentcore:us-east-1:123456789012:runtime/porchlight-abc"
 
 
 def _agentcore(ctx: AppContext, responses: list[dict[str, Any]]) -> tuple[Any, StubAgentCoreClient]:
     client = StubAgentCoreClient(responses)
-    return AgentCoreOrchestrator(ctx, arn=ARN, region="us-west-2", client=client), client
+    return AgentCoreOrchestrator(ctx, arn=ARN, region="us-east-1", client=client), client
 
 
 def test_process_request_sends_the_contract_payload(ctx: AppContext) -> None:

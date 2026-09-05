@@ -56,6 +56,7 @@ def record(
     detail: dict[str, Any] | None = None,
     agent: str | None = None,
     autonomous: bool = True,
+    visible: bool = True,
 ) -> LogEvent:
     """Append one quiet-log line and mirror it to the live trace stream.
 
@@ -67,6 +68,7 @@ def record(
         detail: Structured payload for the expandable row in the UI.
         agent: Which agent did it (from ``invocation_state["agent"]``).
         autonomous: False when a human asked for it.
+        visible: False for bookkeeping the coordinator should not have to read.
 
     Returns:
         The persisted :class:`~porchlight.models.LogEvent`.
@@ -79,6 +81,7 @@ def record(
         summary=summary,
         detail=jsonable(detail or {}),
         autonomous=autonomous,
+        visible=visible,
     )
     ctx.store.append_log(event)
     ctx.emit(

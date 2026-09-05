@@ -161,7 +161,10 @@ function RequestThread({ group, defaultOpen }: { group: Group; defaultOpen: bool
   const [open, setOpen] = useState(defaultOpen)
   const { request } = group
   const needsYou = group.events.some((event) => !event.autonomous)
-  const title = request?.summary ?? (group.key === '__loose__' ? 'Housekeeping' : group.key)
+  // Never the raw id: a coordinator reads summaries, and the roster may still be loading.
+  const title =
+    request?.summary?.trim() ||
+    (group.key === '__loose__' ? 'Housekeeping' : 'A request Porchlight handled')
 
   return (
     <section className="porch-card overflow-hidden">
@@ -234,7 +237,7 @@ function QuietRow({ event }: { event: LogEvent }) {
   const hasDetail = Object.keys(event.detail).length > 0
 
   return (
-    <li className="relative flex animate-slide-in items-start gap-3 py-1.5">
+    <li data-testid="quiet-row" className="relative flex animate-slide-in items-start gap-3 py-1.5">
       <span className="tabnum mt-[0.15rem] w-[3.1rem] shrink-0 text-right text-[0.72rem] text-cream-faint">
         {clockTime(event.ts)}
       </span>

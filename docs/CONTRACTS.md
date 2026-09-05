@@ -40,7 +40,7 @@ session_dir: str = "data/sessions"
 session_bucket: str | None
 memory_id: str | None                 # AgentCore Memory id
 dynamo_table: str = "porchlight"
-aws_region: str = "us-west-2"         # falls back to AWS_REGION
+aws_region: str = "us-east-1"         # falls back to AWS_REGION
 model_sonnet: str = "global.anthropic.claude-sonnet-4-6"
 model_haiku: str = "global.anthropic.claude-haiku-4-5-20251001-v1:0"
 agent_runtime_arn: str | None         # when API should call AgentCore instead of in-process
@@ -59,6 +59,11 @@ confidence_threshold: float = 0.55
 Enums as `StrEnum`: `Category`, `Urgency`, `RequestStatus`, `Source`, `ReplyIntent`, `DecisionKind`,
 `DecisionStatus`, `LogKind`, `MessageStatus`, `Recipient` ("volunteer"|"requester"|"coordinator").
 Every model has `model_config = ConfigDict(extra="forbid")` except `LogEvent.detail: dict[str, Any]`.
+`LogEvent.visible: bool = True` — False marks bookkeeping (lookups, reads, the audit copy of a row a tool
+already wrote, and a `GUIDANCE:` policy verdict, which is a nudge at the model that the row it
+redirects to already tells); the Quiet Log hides those. Wording for every row comes from
+`porchlight.tools.summaries.describe_tool(ctx, tool_name, inputs, result)`, which strips verdict
+prefixes and scrubs internal ids (`req_…`, `vol_…`) out of every string it prints.
 `AidRequest.attempts: list[Attempt]` where `Attempt(volunteer_id, sent_at, outcome: "pending"|"accepted"|"declined"|"counter"|"concern"|"timeout", note: str | None)`.
 `AidRequest` also carries `version: int` (optimistic concurrency, store-managed), `is_request: bool = True`, and
 `duplicate_of: str | None`; `AidRequest.needs_outreach()` is false for either of the last two.
@@ -153,7 +158,8 @@ Payload: `{"action": "process_request"|"resume_decision"|"sweep"|"brief", ...arg
 ## 9. API (`api/`) — FastAPI, JSON, CORS open in demo
 ```
 GET  /api/health
-GET  /api/porch                     -> {status_line, light_on: bool, open_decisions: [Decision], quiet_log: [LogEvent], stats}
+GET  /api/porch[?all=1]             -> {status_line, light_on: bool, open_decisions: [Decision], quiet_log: [LogEvent], stats}
+                                       quiet_log holds only rows with LogEvent.visible unless ?all=1
 GET  /api/requests?status=          -> [AidRequest]
 GET  /api/requests/{id}             -> {request, attempts, messages, log}
 POST /api/inbox                     -> {text, source, contact?, image_base64?} -> creates AidRequest via run_request; returns RunOutcome

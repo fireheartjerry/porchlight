@@ -52,7 +52,7 @@ class Settings(BaseSettings):
     )
     dynamo_table: str = "porchlight"
     aws_region: str = Field(
-        default="us-west-2",
+        default="us-east-1",
         validation_alias=AliasChoices("PORCHLIGHT_AWS_REGION", "AWS_REGION", "AWS_DEFAULT_REGION"),
     )
     agent_runtime_arn: str | None = None

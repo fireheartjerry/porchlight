@@ -15,8 +15,7 @@ from strands.types.tools import ToolContext
 from ..context import AppContext, get_ctx
 from ..models import LogKind, MessageStatus, OutboundMessage, Recipient, jsonable
 from ._common import agent_name, error, parse_iso, record, trace
-
-SUMMARY_CHARS = 120
+from .summaries import describe_tool
 
 
 def _recipient_name(ctx: AppContext, to: Recipient, recipient_id: str) -> str:
@@ -70,14 +69,22 @@ def send_message_impl(
     message = _new_message(ctx, request_id, recipient, recipient_id, body)
     sent = ctx.channel.send(message)
     ctx.store.put_message(sent)
-    who = _recipient_name(ctx, recipient, recipient_id)
+    args = {"request_id": request_id, "to": to, "recipient_id": recipient_id, "body": body}
+    note = describe_tool(ctx, "send_message", args)
     record(
         ctx,
         LogKind.MESSAGE_SENT,
-        f"Messaged {who}: {body.strip()[:SUMMARY_CHARS]}",
+        note.summary,
         request_id=request_id,
         agent=agent,
-        detail={"message_id": sent.id, "to": str(recipient), "recipient_id": recipient_id, "body": body},
+        visible=note.visible,
+        detail={
+            "message_id": sent.id,
+            "to": str(recipient),
+            "recipient_id": recipient_id,
+            "recipient_name": _recipient_name(ctx, recipient, recipient_id),
+            "body": body,
+        },
     )
     return {"message_id": sent.id, "status": str(sent.status)}
 
@@ -104,17 +111,26 @@ def schedule_message_impl(
     message = _new_message(ctx, request_id, recipient, recipient_id, body)
     scheduled = ctx.channel.schedule(message, when)
     ctx.store.put_message(scheduled)
-    who = _recipient_name(ctx, recipient, recipient_id)
+    args = {
+        "request_id": request_id,
+        "to": to,
+        "recipient_id": recipient_id,
+        "body": body,
+        "send_at_iso": when.isoformat(),
+    }
+    note = describe_tool(ctx, "schedule_message", args)
     record(
         ctx,
         LogKind.MESSAGE_SENT,
-        f"Queued a message to {who} for {when:%a %d %b %H:%M}: {body.strip()[:SUMMARY_CHARS]}",
+        note.summary,
         request_id=request_id,
         agent=agent,
+        visible=note.visible,
         detail={
             "message_id": scheduled.id,
             "to": str(recipient),
             "recipient_id": recipient_id,
+            "recipient_name": _recipient_name(ctx, recipient, recipient_id),
             "send_at": when.isoformat(),
             "body": body,
         },
@@ -133,10 +149,10 @@ def read_replies_impl(ctx: AppContext, request_id: str, *, agent: str | None = N
     trace(
         ctx,
         "tool_call",
-        f"{len(payload)} reply(ies) waiting",
+        describe_tool(ctx, "read_replies", {"request_id": request_id}, payload).summary,
         request_id=request_id,
         agent=agent,
-        detail={"count": len(payload)},
+        detail={"count": len(payload), "replies": payload},
     )
     return payload
 

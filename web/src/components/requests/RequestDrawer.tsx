@@ -255,7 +255,7 @@ export function RequestDrawer({ requestId, onClose }: { requestId: string; onClo
 
             {/* 5 — the trail */}
             <section>
-              <SectionLabel className="mb-2" count={data.log.length}>
+              <SectionLabel className="mb-2" count={data.log.filter((event) => event.visible).length}>
                 Activity
               </SectionLabel>
               <LogTrail events={data.log} />

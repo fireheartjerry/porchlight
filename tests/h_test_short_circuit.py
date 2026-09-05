@@ -214,7 +214,7 @@ def test_the_duplicate_dialysis_message_is_closed_against_the_original(demo_ctx:
 def test_the_short_circuit_is_written_to_the_quiet_log(demo_ctx: AppContext) -> None:
     request, _outcome = _run_sample(demo_ctx, "sm_thank_you")
     summaries = [event.summary for event in demo_ctx.store.list_log(request_id=request.id)]
-    assert any("no outreach needed" in summary for summary in summaries)
+    assert any("isn't asking for help" in summary for summary in summaries)
 
 
 def test_an_ordinary_request_still_goes_all_the_way_through(demo_ctx: AppContext) -> None:

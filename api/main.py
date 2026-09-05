@@ -432,16 +432,29 @@ def create_app(
 
     # --- porch ----------------------------------------------------------------
     @app.get("/api/porch", response_model=PorchResponse, tags=["porch"])
-    async def porch(request: Request, log_limit: int = Query(default=60, ge=1, le=500)) -> PorchResponse:
-        """Everything the home screen shows: status line, open cards, quiet log, stats."""
+    async def porch(
+        request: Request,
+        log_limit: int = Query(default=60, ge=1, le=500),
+        all: bool = Query(default=False, alias="all", description="Include housekeeping rows"),
+    ) -> PorchResponse:
+        """Everything the home screen shows: status line, open cards, quiet log, stats.
+
+        The quiet log is the coordinator's view, so bookkeeping rows (lookups, reads, and the
+        audit copy of a row a tool already wrote) are hidden unless ``?all=1`` asks for them.
+        """
         ctx = _ctx(request)
         stats = _stats(ctx)
         open_decisions = ctx.store.list_decisions(status=DecisionStatus.OPEN)
+        # Over-read, then filter: the housekeeping rows outnumber the visible ones roughly
+        # two to one, so a bare ``limit`` would leave the porch half empty.
+        rows = ctx.store.list_log(limit=log_limit if all else min(500, log_limit * 4))
+        if not all:
+            rows = [row for row in rows if row.visible][:log_limit]
         return PorchResponse(
             status_line=_status_line(stats),
             light_on=len(open_decisions) > 0,
             open_decisions=open_decisions,
-            quiet_log=ctx.store.list_log(limit=log_limit),
+            quiet_log=rows,
             stats=stats,
             group=_group_settings(ctx),
         )

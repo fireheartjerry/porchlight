@@ -108,6 +108,9 @@ def create_request_from_inbox(
             agent="intake",
             kind=LogKind.TOOL_CALL,
             summary=summary,
+            # The intake agent's own row ("Read Ezra's text: …") tells the coordinator this
+            # better a beat later, so the arrival itself is bookkeeping.
+            visible=False,
             detail={
                 "source": request.source.value,
                 "contact": contact,

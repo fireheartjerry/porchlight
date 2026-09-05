@@ -160,6 +160,19 @@ def test_porch_lights_up_and_counts_open_cards(ctx: AppContext, client: TestClie
     assert "1 needs you." in body["status_line"]
 
 
+def test_the_quiet_log_hides_housekeeping_until_asked(ctx: AppContext, client: TestClient) -> None:
+    """The porch shows the story; ``?all=1`` shows the mechanics behind it."""
+    ctx.store.append_log(LogEvent(summary="Asked Maria: Ride to dialysis Thursday 9am."))
+    ctx.store.append_log(LogEvent(summary="Looked up Ezra Okafor — 4 past requests.", visible=False))
+
+    quiet = [row["summary"] for row in client.get("/api/porch").json()["quiet_log"]]
+    assert "Asked Maria: Ride to dialysis Thursday 9am." in quiet
+    assert not any("Looked up" in summary for summary in quiet)
+
+    everything = [row["summary"] for row in client.get("/api/porch?all=1").json()["quiet_log"]]
+    assert any("Looked up" in summary for summary in everything)
+
+
 def test_status_line_pluralises_two_cards(ctx: AppContext, client: TestClient) -> None:
     _open_decision(ctx)
     _open_decision(ctx, title="Second card")

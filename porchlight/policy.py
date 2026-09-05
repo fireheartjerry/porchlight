@@ -55,6 +55,7 @@ from .models import (
     VolunteerReply,
     jsonable,
 )
+from .tools.summaries import AGENT_ROLES, call_phrase, describe_tool
 
 logger = logging.getLogger(__name__)
 
@@ -889,6 +890,23 @@ def _request_id(event: Any, ctx: AppContext) -> str | None:
     return value if isinstance(value, str) else None
 
 
+NODE_STARTED: dict[str, str] = {
+    "intake": "Intake is reading the message.",
+    "matcher": "Matcher is looking for someone who can help.",
+    "outreach": "Outreach is asking a volunteer.",
+    "steward": "Steward is confirming and tidying up.",
+    "brief": "Brief is writing the evening digest.",
+}
+"""What each graph node is about to do, for the Trace drawer."""
+
+
+def _role(name: str | None) -> str:
+    """A readable name for an agent or graph node."""
+    if not name:
+        return "Porchlight"
+    return AGENT_ROLES.get(name, name.replace("_", " ").capitalize())
+
+
 def _short(value: Any, limit: int = 160) -> str:
     """Compact one-line rendering of a tool argument blob."""
     try:
@@ -898,12 +916,29 @@ def _short(value: Any, limit: int = 160) -> str:
     return text if len(text) <= limit else text[: limit - 1] + "…"
 
 
+SELF_LOGGING_TOOLS: frozenset[str] = frozenset(
+    {
+        "send_message",
+        "schedule_message",
+        "assign_volunteer",
+        "record_attempt",
+        "update_request",
+        "close_request",
+        "remember",
+    }
+)
+"""Tools that write their own quiet-log row, so the hook's copy is bookkeeping."""
+
+
 @dataclass
 class AuditHook(HookProvider):
     """Writes the Quiet Log: one row per tool call, with its arguments and outcome.
 
     Every autonomous side effect ends up here, which is what makes the coordinator able to
-    skim what happened rather than having to supervise it.
+    skim what happened rather than having to supervise it. The wording comes from
+    :func:`porchlight.tools.summaries.describe_tool` — the tool itself knows best what it did —
+    and anything that is pure bookkeeping is written with ``visible=False`` so the porch shows
+    the story rather than the mechanics.
     """
 
     ctx: AppContext
@@ -923,27 +958,35 @@ class AuditHook(HookProvider):
                 "ts": self.ctx.now().isoformat(),
                 "request_id": request_id,
                 "agent": _agent_name(event),
-                "summary": f"{_agent_name(event) or 'agent'} → {name}",
+                "summary": call_phrase(name, _agent_name(event)),
                 "detail": {"tool": name, "input": jsonable(event.tool_use.get("input") or {})},
             }
         )
 
     def _after_tool(self, event: AfterToolCallEvent) -> None:
         name = str(event.tool_use.get("name", "tool"))
-        args = event.tool_use.get("input") or {}
+        args = dict(event.tool_use.get("input") or {})
         request_id = str(args.get("request_id") or "") or _request_id(event, self.ctx)
         status = str((event.result or {}).get("status", "unknown"))
         cancelled = bool(event.cancel_message)
         kind = LogKind.MESSAGE_SENT if name in MESSAGE_TOOLS else LogKind.TOOL_CALL
         if name == "remember":
             kind = LogKind.MEMORY
-        summary = f"{name} {'cancelled' if cancelled else status}"
+        note = describe_tool(
+            self.ctx,
+            name,
+            args,
+            event.result,
+            cancelled=cancelled,
+            cancel_message=event.cancel_message,
+            card=decode_decision(event.cancel_message),
+        )
         entry = LogEvent(
             ts=self.ctx.now(),
             request_id=request_id or None,
             agent=_agent_name(event),
             kind=LogKind.POLICY if cancelled else kind,
-            summary=summary,
+            summary=note.summary,
             detail={
                 "tool": name,
                 "input": jsonable(args),
@@ -952,6 +995,9 @@ class AuditHook(HookProvider):
                 "duration_ms": round((event.duration or 0.0) * 1000),
             },
             autonomous=not cancelled,
+            # A tool that already wrote its own line says it better; this row stays as the
+            # audit trail behind ``?all=1`` rather than repeating it on the porch.
+            visible=note.visible and (cancelled or name not in SELF_LOGGING_TOOLS),
         )
         try:
             self.ctx.store.append_log(entry)
@@ -963,7 +1009,7 @@ class AuditHook(HookProvider):
                 "ts": entry.ts.isoformat(),
                 "request_id": entry.request_id,
                 "agent": entry.agent,
-                "summary": summary,
+                "summary": note.summary,
                 "detail": {"tool": name, "status": status, "cancelled": cancelled},
             }
         )
@@ -1000,7 +1046,7 @@ class TraceHook(HookProvider):
     def _node_start(self, event: BeforeNodeCallEvent) -> None:
         self._emit(
             "node_start",
-            f"{event.node_id} started",
+            NODE_STARTED.get(event.node_id, f"{_role(event.node_id)} started."),
             {"node": event.node_id},
             agent=event.node_id,
             request_id=_request_id(event, self.ctx),
@@ -1009,7 +1055,7 @@ class TraceHook(HookProvider):
     def _node_end(self, event: AfterNodeCallEvent) -> None:
         self._emit(
             "node_end",
-            f"{event.node_id} finished",
+            f"{_role(event.node_id)} is done.",
             {"node": event.node_id},
             agent=event.node_id,
             request_id=_request_id(event, self.ctx),
@@ -1025,7 +1071,16 @@ class TraceHook(HookProvider):
             for block in blocks
             if isinstance(block, dict) and isinstance(block.get("toolUse"), dict)
         ]
-        summary = text[:140] if text else (f"tool use: {', '.join(t for t in tools if t)}" if tools else role)
+        named = [str(name) for name in tools if name]
+        who = _role(_agent_name(event))
+        if text:
+            summary = f"{who}: {text[:140]}"
+        elif named:
+            summary = call_phrase(named[0], _agent_name(event))
+        elif role == "user":
+            summary = f"The tool's answer came back to {who}."
+        else:
+            summary = f"{who} added an empty turn."
         self._emit(
             "message",
             summary,
@@ -1039,9 +1094,16 @@ class TraceHook(HookProvider):
         for key, field_name in fields:
             self.tokens[key] = int(usage.get(field_name, 0) or 0)
         stop = getattr(event.stop_response, "stop_reason", None) if event.stop_response else None
+        who = _role(_agent_name(event))
+        if event.exception:
+            summary = f"{who} hit a model error."
+        elif stop == "tool_use":
+            summary = f"{who} decided to use a tool."
+        else:
+            summary = f"{who} finished thinking."
         self._emit(
             "model_call",
-            f"model {stop or ('error' if event.exception else 'done')}",
+            summary,
             {"stop_reason": stop, "usage": usage, "error": str(event.exception) if event.exception else None},
             agent=_agent_name(event),
             request_id=_request_id(event, self.ctx),

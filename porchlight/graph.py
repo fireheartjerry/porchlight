@@ -67,9 +67,11 @@ from .policy import (
     card_for,
     decode_decision,
     evaluate_request,
+    extract_amount,
     option_id_of,
     unmatched_card,
 )
+from .tools.summaries import display_name, first_name
 
 logger = logging.getLogger(__name__)
 
@@ -152,6 +154,7 @@ def _log(
     summary: str,
     *,
     autonomous: bool = True,
+    visible: bool = True,
     **detail: Any,
 ) -> None:
     """Write one quiet-log row and mirror it to the trace stream."""
@@ -163,6 +166,7 @@ def _log(
         summary=summary,
         detail=jsonable(detail),
         autonomous=autonomous,
+        visible=visible,
     )
     try:
         ctx.store.append_log(entry)
@@ -177,6 +181,49 @@ def _log(
             "summary": summary,
             "detail": entry.detail,
         }
+    )
+
+
+def _recipient_of(ctx: AppContext, message: Any) -> str:
+    """Who a queued message was for, by name when we know it."""
+    recipient_id = getattr(message, "recipient_id", None)
+    volunteer = ctx.store.get_volunteer(recipient_id) if recipient_id else None
+    if volunteer is not None:
+        return first_name(volunteer.name)
+    requester = ctx.store.get_requester(recipient_id) if recipient_id else None
+    return first_name(requester.name) if requester else "them"
+
+
+def _no_outreach_summary(ctx: AppContext, request: AidRequest) -> str:
+    """Why a message needs nobody asked, said the way a coordinator would say it."""
+    if request.duplicate_of:
+        original = ctx.store.get_request(request.duplicate_of)
+        what = original.summary if original and original.summary else "the same thing"
+        return f"Already in hand — this chases “{what}”, so nobody was asked twice."
+    return "Nothing to arrange — this message isn't asking for help."
+
+
+DECISION_LINES: dict[DecisionKind, str] = {
+    DecisionKind.SAFETY: "Stopped everything and put it on the porch — this may be an emergency.",
+    DecisionKind.MONEY: "Paused before contacting anyone — money is involved{amount}. Card raised.",
+    DecisionKind.VETTING: "Paused before asking a volunteer — {who} is new to us. Card raised.",
+    DecisionKind.UNMATCHED: "Nobody free for this — put it on the porch for you: {what}",
+    DecisionKind.CONCERN: "A volunteer raised a concern — that one is yours to answer.",
+    DecisionKind.POLICY: "Paused for you — {title}",
+}
+"""One plain line per kind of decision card, filled in from the request."""
+
+
+def _decision_summary(ctx: AppContext, decision: Decision, request: AidRequest | None) -> str:
+    """The quiet-log line for a card that just went up on the porch."""
+    amount = extract_amount(request.raw_text) if request else None
+    requester = ctx.store.get_requester(request.requester_id) if request and request.requester_id else None
+    template = DECISION_LINES.get(decision.kind, DECISION_LINES[DecisionKind.POLICY])
+    return template.format(
+        amount=f" (${amount:.0f})" if amount else "",
+        who=display_name(requester.name if requester else None, "this neighbour"),
+        what=request.summary if request and request.summary else "this one",
+        title=decision.title,
     )
 
 
@@ -279,13 +326,13 @@ class PolicyGateHook(HookProvider):
 
         if option in APPROVING_OPTIONS:
             status = RequestStatus.MATCHING
-            summary = f"coordinator chose '{option}' — continuing"
+            summary = "You said go ahead — picking it back up."
         elif option == "decline_request":
             status = RequestStatus.DECLINED
-            summary = "coordinator declined the request"
+            summary = "You turned this one down; nobody was asked."
         else:
             status = RequestStatus.ESCALATED
-            summary = f"coordinator chose '{option or 'no option'}' — Porchlight stands down"
+            summary = "You are taking this one on — Porchlight is standing down."
 
         _save(self.ctx, request.id, status=status)
         _log(
@@ -325,7 +372,13 @@ class RequestSyncHook(HookProvider):
             parsed = node_output(graph_state, "intake", IntakeResult)
             if parsed is not None:
                 parsed.apply_to(draft)
-                _log(self.ctx, draft.id, LogKind.TOOL_CALL, f"intake: {draft.summary or 'parsed'}")
+                _log(
+                    self.ctx,
+                    draft.id,
+                    LogKind.TOOL_CALL,
+                    f"Filed it as: {draft.summary or 'a request'}.",
+                    visible=False,
+                )
             if draft.status in (RequestStatus.NEW, RequestStatus.TRIAGING) and draft.needs_outreach():
                 draft.status = RequestStatus.MATCHING
             if not draft.needs_outreach():
@@ -333,12 +386,7 @@ class RequestSyncHook(HookProvider):
                     self.ctx,
                     draft.id,
                     LogKind.POLICY,
-                    "no outreach needed: "
-                    + (
-                        f"duplicate of {draft.duplicate_of}"
-                        if draft.duplicate_of
-                        else "the message asks for nothing"
-                    ),
+                    _no_outreach_summary(self.ctx, draft),
                     duplicate_of=draft.duplicate_of,
                     is_request=draft.is_request,
                 )
@@ -548,10 +596,11 @@ def _decisions_for(
             ctx,
             decision.request_id,
             LogKind.DECISION,
-            f"decision card: {decision.title}",
+            _decision_summary(ctx, decision, request),
             autonomous=False,
             decision_id=decision.id,
             decision_kind=str(kind),
+            title=decision.title,
         )
     return cards
 
@@ -570,11 +619,12 @@ def _finish(ctx: AppContext, request_id: str, graph: Graph, result: Any, logs_be
     status = request.status if request else RequestStatus.NEW
     logs_after = len(ctx.store.list_log(request_id=request_id, limit=1000))
     if interrupted:
-        summary = f"paused for the coordinator: {'; '.join(d.title for d in decisions) or 'a decision'}"
+        titles = "; ".join(d.title for d in decisions)
+        summary = f"Paused for you — {titles}" if titles else "Paused for you: a decision is waiting."
     elif getattr(result, "status", None) is Status.FAILED:
-        summary = "the graph could not finish this request"
+        summary = "Porchlight could not finish this one; it is waiting for you."
     else:
-        summary = f"handled autonomously; request is {status}"
+        summary = f"Handled without you — the request is {str(status).replace('_', ' ')}."
     return RunOutcome(
         request_id=request_id,
         status=status,
@@ -643,13 +693,15 @@ def resume_decision(ctx: AppContext, decision_id: str, option_id: str, note: str
     logs_before = len(ctx.store.list_log(request_id=request_id, limit=1000))
     decision.resolve(option_id, note, now=ctx.now())
     ctx.store.put_decision(decision)
+    chosen = next((o.label for o in decision.options if o.id == option_id), option_id.replace("_", " "))
     _log(
         ctx,
         decision.request_id,
         LogKind.DECISION,
-        f"coordinator chose '{option_id}' on {decision.title}",
+        f"You chose “{chosen}” on: {decision.title}" + (f" — “{note}”" if note else ""),
         autonomous=False,
         decision_id=decision.id,
+        option=option_id,
         note=note,
     )
 
@@ -670,7 +722,7 @@ def resume_decision(ctx: AppContext, decision_id: str, option_id: str, note: str
     result = graph(responses, invocation_state={"ctx": ctx, "request_id": request_id})
     outcome = _finish(ctx, request_id, graph, result, logs_before)
     if not outcome.interrupted:
-        outcome.summary = f"coordinator chose '{option_id}'; request is {outcome.status}"
+        outcome.summary = f"You chose “{chosen}” — the request is {str(outcome.status).replace('_', ' ')}."
     return outcome
 
 
@@ -691,7 +743,13 @@ def run_sweep(ctx: AppContext) -> SweepOutcome:
             continue
         ctx.store.put_message(delivered)
         sent += 1
-        _log(ctx, message.request_id, LogKind.MESSAGE_SENT, f"sent scheduled message to {message.to}")
+        _log(
+            ctx,
+            message.request_id,
+            LogKind.MESSAGE_SENT,
+            f"Sent the message that was waiting for {_recipient_of(ctx, message)}.",
+            body=message.body,
+        )
 
     escalated = 0
     cards: list[Decision] = []
@@ -726,7 +784,14 @@ def run_sweep(ctx: AppContext) -> SweepOutcome:
         cards.append(decision)
         _save(ctx, request.id, status=RequestStatus.ESCALATED)
         escalated += 1
-        _log(ctx, request.id, LogKind.DECISION, f"sweep escalated: {reason}", decision_id=decision.id)
+        _log(
+            ctx,
+            request.id,
+            LogKind.DECISION,
+            f"Brought this to you because {reason}: {request.summary or 'a request'}",
+            autonomous=False,
+            decision_id=decision.id,
+        )
 
     return SweepOutcome(
         messages_sent=sent,
@@ -753,7 +818,7 @@ def run_brief(ctx: AppContext, day: date | None = None) -> str:
     markdown = getattr(parsed, "markdown", "") if parsed is not None else ""
     if not markdown:
         markdown = _fallback_brief(ctx, day, stats)
-    _log(ctx, None, LogKind.MODEL, f"brief written for {day.isoformat()}")
+    _log(ctx, None, LogKind.MODEL, f"Wrote the brief for {day:%A %d %B}.", visible=False)
     return markdown
 
 

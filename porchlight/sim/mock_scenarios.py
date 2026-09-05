@@ -31,9 +31,9 @@ from strands.types.streaming import StreamEvent
 from strands.types.tools import ToolChoice, ToolSpec
 
 from ..context import AppContext
-from ..matching import rank_candidates, zone_info
 from ..models import AidRequest, Category, ReplyIntent, Requester, RequestStatus, Urgency, Volunteer
 from ..testing.mock_model import MockModel, ScenarioModel, _structured_output_spec, emit_message
+from ..tools.summaries import clip, first_name, when_phrase
 from .fixtures import SAMPLE_MESSAGES
 from .volunteer_sim import guess_intent
 
@@ -205,7 +205,7 @@ SAMPLE_PLANS: dict[str, SamplePlan] = {
         reasoning="A money ask well over the petty-cash limit. The coordinator decides, not me.",
     ),
     "sm_first_time_in_home": SamplePlan(
-        summary="New neighbour asking for help moving furniture inside their home",
+        summary="Help moving furniture and sorting a bedroom, inside the house",
         category=Category.REPAIR,
         window=(24, 120),
         flexible=True,
@@ -462,40 +462,6 @@ def _iso(moment: datetime | None) -> str | None:
     return moment.isoformat() if moment else None
 
 
-HONORIFICS = frozenset({"mr", "mrs", "ms", "miss", "dr", "mx", "prof", "rev", "sr", "sra"})
-
-
-def _first_name(name: str | None) -> str:
-    """The part of a name you would actually text, skipping any honorific."""
-    parts = [part for part in (name or "").split() if part]
-    for part in parts:
-        if part.rstrip(".").lower() not in HONORIFICS:
-            return part
-    return parts[-1] if parts else "there"
-
-
-def _local(moment: datetime, timezone: str) -> datetime:
-    """The group's local time for a UTC moment."""
-    return moment.astimezone(zone_info(timezone))
-
-
-def _clock_phrase(moment: datetime) -> str:
-    """``Thursday at 9am`` — the way a neighbour writes a time."""
-    return moment.strftime("%A at %-I%p").replace("AM", "am").replace("PM", "pm")
-
-
-def _when_phrase(request: AidRequest, timezone: str) -> str:
-    """A short, human way to say when a job is, in the group's local time."""
-    if request.window_start is None:
-        return "whenever suits you this week"
-    start = _local(request.window_start, timezone)
-    if not request.flexible:
-        return f"on {_clock_phrase(start)}"
-    if request.window_end is not None:
-        return f"any time before {_local(request.window_end, timezone).strftime('%A')}"
-    return "whenever suits you"
-
-
 def _intake_turn(ctx: AppContext, request: AidRequest | None, messages: Messages) -> Turn:
     """Look the requester up once, check for a duplicate, then read the message."""
     plan = plan_for(request)
@@ -639,7 +605,10 @@ def _matcher_turn(ctx: AppContext, request: AidRequest | None, messages: Message
     if confidence < ctx.settings.confidence_threshold:
         notes = "Nobody on the roster really fits this one; the coordinator should see it."
     else:
-        notes = f"Asking {candidates[0]['name']} first; {max(0, len(ranked) - 1)} more on the bench."
+        bench = max(0, len(ranked) - 1)
+        notes = f"Asking {candidates[0]['name']} first" + (
+            f"; {bench} more on the bench if they can't." if bench else "; nobody else free."
+        )
     return Turn(
         structured={
             "request_id": request.id,
@@ -651,29 +620,31 @@ def _matcher_turn(ctx: AppContext, request: AidRequest | None, messages: Message
 
 
 def _next_volunteer(ctx: AppContext, request: AidRequest) -> Volunteer | None:
-    """The best-scoring volunteer who has not been asked about this request yet."""
-    volunteers = ctx.store.list_volunteers()
-    from ..tools._common import load_for
+    """The best-scoring volunteer who has not been asked about this request yet.
 
-    ranked = rank_candidates(
-        volunteers,
-        request,
-        loads={v.id: load_for(ctx, v.id) for v in volunteers},
-        now=ctx.now(),
-        timezone=ctx.settings.timezone,
-        limit=1,
-        exclude=request.attempted_volunteer_ids(),
-    )
+    Same ranking the matcher published a moment ago, memory and all, so the Quiet Log never
+    says "Shortlisted Devon" and then "Asked Walter".
+    """
+    from ..tools.matching import rank_for_request
+
+    ranked = rank_for_request(ctx, request, limit=1)
     return ctx.store.get_volunteer(ranked[0].volunteer_id) if ranked else None
+
+
+def _need_phrase(request: AidRequest) -> str:
+    """What the neighbour needs, as written — always quoted after a colon or a dash."""
+    return clip(request.summary or request.raw_text, 110) or "a hand with something"
 
 
 def _ask_body(request: AidRequest, volunteer: Volunteer, requester: Requester | None, timezone: str) -> str:
     """The text Porchlight sends a volunteer, written the way a neighbour would."""
-    who = _first_name(requester.name if requester else None)
+    who = first_name(requester.name if requester else None)
+    zone = f" over in {request.location_zone}" if request.location_zone else ""
+    extras = f" ({', '.join(request.constraints)})" if request.constraints else ""
     return (
-        f"Hi {_first_name(volunteer.name)} — {who} needs {request.summary or 'a hand'}, "
-        f"{_when_phrase(request, timezone)}. Are you free? Completely fine to say no, "
-        "just let me know either way and I'll ask someone else."
+        f"Hi {first_name(volunteer.name)} — {who}{zone} needs a hand: "
+        f"{_need_phrase(request)}{extras}. Could you do it {when_phrase(request, timezone)}? "
+        "Completely fine to say no — just tell me either way and I'll ask someone else."
     )
 
 
@@ -796,8 +767,9 @@ def _resolve_calls(
 ) -> list[tuple[str, dict[str, Any]]]:
     """The tool calls that write one volunteer's answer down, in the order they must run."""
     if intent == ReplyIntent.ACCEPT:
+        # Their answer goes down first, with what they actually said; the confirmation then
+        # finds that attempt already settled and does not write a second, noteless one.
         return [
-            ("assign_volunteer", {"request_id": request_id, "volunteer_id": volunteer_id}),
             (
                 "record_attempt",
                 {
@@ -807,6 +779,7 @@ def _resolve_calls(
                     "note": text[:200],
                 },
             ),
+            ("assign_volunteer", {"request_id": request_id, "volunteer_id": volunteer_id}),
         ]
     outcome = {
         ReplyIntent.DECLINE: "declined",
@@ -835,7 +808,7 @@ def _outreach_result(ctx: AppContext, volunteer_id: str, intent: str, text: str)
             "action": "accepted",
             "volunteer_id": volunteer_id,
             "reply_intent": str(ReplyIntent.ACCEPT),
-            "note": f"{who} said yes",
+            "note": f"{who} said yes: “{clip(text, 80)}”",
             "done": True,
         }
     if intent == ReplyIntent.CONCERN:
@@ -851,28 +824,28 @@ def _outreach_result(ctx: AppContext, volunteer_id: str, intent: str, text: str)
             "action": "countered",
             "volunteer_id": volunteer_id,
             "reply_intent": str(ReplyIntent.COUNTER),
-            "note": f"{who} proposed a different time",
+            "note": f"{who} offered another time: “{clip(text, 80)}”",
             "done": False,
         }
     return {
         "action": "declined",
         "volunteer_id": volunteer_id,
         "reply_intent": str(ReplyIntent.DECLINE),
-        "note": f"{who} cannot make it; trying the next person",
+        "note": f"{who} can't: “{clip(text, 80)}” — trying the next person",
         "done": False,
     }
 
 
 def _close_out_reply(ctx: AppContext, request: AidRequest, requester: Requester | None) -> str:
     """The one warm line a thank-you note or a duplicate gets back."""
-    who = _first_name(requester.name if requester else None)
+    who = first_name(requester.name if requester else None)
     if not request.duplicate_of:
         return (
             f"Thank you {who} — that has been passed on to the neighbour who cooked, and it will "
             "make their week. Nothing needed from us."
         )
     original = ctx.store.get_request(request.duplicate_of)
-    when = _when_phrase(original, ctx.settings.timezone) if original else "as arranged"
+    when = when_phrase(original, ctx.settings.timezone) if original else "as arranged"
     return (
         f"Got it {who} — your earlier message came through and it is in hand {when}. "
         "You will hear from us as soon as someone is confirmed."
@@ -883,9 +856,7 @@ def _close_out_turn(ctx: AppContext, request: AidRequest, messages: Messages) ->
     """Reply politely and close a message that needs no outreach at all."""
     done = called(messages)
     requester = ctx.store.get_requester(request.requester_id) if request.requester_id else None
-    reason = (
-        f"duplicate of {request.duplicate_of}" if request.duplicate_of else "thank-you note, no help needed"
-    )
+    reason = "already in hand, asked twice" if request.duplicate_of else "thank-you note, no help needed"
     if "send_message" not in done and request.requester_id:
         return Turn(
             tool_calls=[
@@ -931,9 +902,10 @@ def _steward_turn(ctx: AppContext, request: AidRequest | None, messages: Message
 
     if "send_message" not in done and request.requester_id:
         body = (
-            f"Good news {_first_name(requester.name if requester else None)} — {who} is coming "
-            f"for {request.summary or 'your request'} {_when_phrase(request, tz)}. "
-            "They'll be in touch if anything changes."
+            f"Good news {first_name(requester.name if requester else None)} — {who} said yes "
+            f"and is coming {when_phrase(request, tz)}. They have it down as: "
+            f"{_need_phrase(request)}. They'll be in touch directly if anything changes, and "
+            "you can always tell us if the time stops working."
         )
         return Turn(
             tool_calls=[
@@ -960,8 +932,9 @@ def _steward_turn(ctx: AppContext, request: AidRequest | None, messages: Message
                         "to": "volunteer",
                         "recipient_id": request.assigned_volunteer_id,
                         "body": (
-                            f"Reminder: {request.summary or 'the job'} "
-                            f"{_when_phrase(request, tz)}. Thanks again for taking it on."
+                            f"Reminder: you're helping {first_name(requester.name if requester else None)} "
+                            f"{when_phrase(request, tz)} — {_need_phrase(request)}. "
+                            "Thanks again for taking it on; just say the word if anything changes."
                         ),
                         "send_at_iso": reminder.isoformat(),
                     },
@@ -969,7 +942,11 @@ def _steward_turn(ctx: AppContext, request: AidRequest | None, messages: Message
             ]
         )
 
-    note = f"{who} took a {request.category} job in {request.location_zone or 'the neighbourhood'}"
+    note = (
+        f"{who} took a {str(request.category).replace('_', ' ')} job "
+        f"in {request.location_zone or 'the neighbourhood'} for "
+        f"{first_name(requester.name if requester else None)}"
+    )
     if "remember" not in done:
         return Turn(
             tool_calls=[
@@ -1004,13 +981,45 @@ def _reminder_time(window_start: datetime | None, now: datetime) -> datetime | N
     return candidate if candidate > now else now
 
 
+WARM_YES = (
+    "i'd love",
+    "would love",
+    "love to",
+    "perfect",
+    "that works",
+    "works for me",
+    "of course",
+    "absolutely",
+    "no problem",
+    "i can ",
+    "i will",
+    "consider it done",
+    "sí",
+    "si,",
+)
+"""Ways a neighbour says yes that a bare keyword list would miss.
+
+Getting this wrong is not cosmetic: an enthusiastic yes read as a refusal puts a lie in the
+Quiet Log ("Rosa can't — 'Friday afternoon is perfect'") and sends the group hunting for a
+second volunteer it does not need.
+"""
+
+
+def read_intent(text: str) -> ReplyIntent:
+    """Read one simulated reply, falling back to the simulator's own keyword pass."""
+    intent = guess_intent(text)
+    if intent is ReplyIntent.UNCLEAR and any(hint in text.lower() for hint in WARM_YES):
+        return ReplyIntent.ACCEPT
+    return intent
+
+
 def _interpret_reply_turn(messages: Messages) -> Turn:
     """Classify one volunteer reply with the same keyword read the simulator uses."""
     text = prompt_text(messages)
     marker = "verbatim:"
     body = text.split(marker, 1)[1] if marker in text else text
     body = body.split("Classify it.")[0].strip()
-    intent = guess_intent(body)
+    intent = read_intent(body)
     concern = body[:200] if intent is ReplyIntent.CONCERN else None
     confidence = 0.9 if intent is not ReplyIntent.UNCLEAR else 0.35
     return Turn(

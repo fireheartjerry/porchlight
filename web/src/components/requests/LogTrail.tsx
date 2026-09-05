@@ -11,6 +11,10 @@ import { agentTone, LOG_KIND_LABELS } from '../../lib/kinds'
 import type { LogEvent } from '../../types'
 
 export function LogTrail({ events, dense = false }: { events: LogEvent[]; dense?: boolean }) {
+  const [showAll, setShowAll] = useState(false)
+  const shown = showAll ? events : events.filter((event) => event.visible)
+  const hidden = events.length - shown.length
+
   if (events.length === 0) {
     return (
       <p className="rounded-xl border border-dashed border-white/[0.08] px-4 py-5 text-[0.82rem] text-cream-faint">
@@ -20,14 +24,25 @@ export function LogTrail({ events, dense = false }: { events: LogEvent[]; dense?
   }
 
   // Newest last reads like a story; the API hands them back newest first.
-  const ordered = [...events].reverse()
+  const ordered = [...shown].reverse()
 
   return (
-    <ol className={clsx('space-y-1', dense && 'space-y-0.5')}>
-      {ordered.map((event) => (
-        <LogRow key={event.id} event={event} />
-      ))}
-    </ol>
+    <>
+      <ol className={clsx('space-y-1', dense && 'space-y-0.5')}>
+        {ordered.map((event) => (
+          <LogRow key={event.id} event={event} />
+        ))}
+      </ol>
+      {hidden > 0 && !showAll && (
+        <button
+          type="button"
+          onClick={() => setShowAll(true)}
+          className="mt-1.5 w-full rounded-xl border border-white/[0.07] bg-white/[0.02] py-1.5 text-[0.74rem] text-cream-faint transition-colors hover:border-white/20 hover:text-cream-dim"
+        >
+          Show the {hidden} lookups and reads behind this
+        </button>
+      )}
+    </>
   )
 }
 

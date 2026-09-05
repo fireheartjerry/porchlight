@@ -1,3 +1,23 @@
 {
-  "targets": {}
+  "targets": {
+    "default": {
+      "resources": {
+        "runtimes": {
+          "Porchlight": {
+            "runtimeId": "porchlight_Porchlight-tKZxVxH9Tf",
+            "runtimeArn": "arn:aws:bedrock-agentcore:us-east-1:892077329800:runtime/porchlight_Porchlight-tKZxVxH9Tf",
+            "roleArn": "arn:aws:iam::892077329800:role/AgentCore-porchlight-defa-ApplicationAgentPorchligh-LCzmxCEAJNNz"
+          }
+        },
+        "memories": {
+          "PorchlightMemory": {
+            "memoryId": "porchlight_PorchlightMemory-TDZOm8D1Cf",
+            "memoryArn": "arn:aws:bedrock-agentcore:us-east-1:892077329800:memory/porchlight_PorchlightMemory-TDZOm8D1Cf"
+          }
+        },
+        "stackName": "AgentCore-porchlight-default",
+        "deployHash": "404f7ea94bbe583e"
+      }
+    }
+  }
 }

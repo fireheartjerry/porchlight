@@ -165,3 +165,49 @@ destroy: ## Tear both halves down: the app stack, then the AgentCore runtime and
 	-@aws ssm delete-parameter --name $(MEMORY_ID_PARAM) >/dev/null 2>&1 || true
 	rm -f $(ENV_DEPLOY) $(CDK_OUTPUTS)
 	@echo "torn down — the table, both buckets, and the memory went with their stacks"
+
+# ------------------------------------------------------------------------------------------
+# Demo video — see docs/VIDEO.md. Runs entirely against the local mock stack; no AWS.
+# ------------------------------------------------------------------------------------------
+
+MEDIA_API_PORT ?= 8000
+MEDIA_WEB_PORT ?= 5173
+# Why the quiet hours are moved: after 21:00 the group's real policy holds outreach until
+# morning. That is a lovely feature and a terrible forty-second story — the narration says
+# "someone says yes" over a screen that would say "held until 8am", and which of the two you
+# filmed would depend on what time you pressed make. The recording group is configured awake
+# so the film is the same film at any hour. Everything else is stock.
+MEDIA_ENV := PORCHLIGHT_MODEL_PROVIDER=mock PORCHLIGHT_QUIET_HOURS=[3,4]
+MEDIA_BASE := http://localhost:$(MEDIA_WEB_PORT)
+MEDIA_API := http://localhost:$(MEDIA_API_PORT)/api
+
+.PHONY: video
+
+video: ## Record and cut the demo video into media/out/porchlight-demo.mp4
+	@test -x /opt/homebrew/bin/ffmpeg || command -v ffmpeg >/dev/null || \
+	  { echo "ffmpeg is not installed — brew install ffmpeg" >&2; exit 1; }
+	@test -d web/node_modules || (cd web && npm ci --no-audit --no-fund)
+	@set -e; \
+	for port in $(MEDIA_API_PORT) $(MEDIA_WEB_PORT); do \
+	  pids="$$(lsof -ti:$$port 2>/dev/null || true)"; \
+	  if [ -n "$$pids" ]; then echo "  freeing port $$port"; kill $$pids 2>/dev/null || true; sleep 1; fi; \
+	done; \
+	mkdir -p media/out; \
+	trap 'lsof -ti:$(MEDIA_API_PORT) -ti:$(MEDIA_WEB_PORT) 2>/dev/null | xargs kill 2>/dev/null || true' \
+	  EXIT INT TERM; \
+	echo "  api   :$(MEDIA_API_PORT)  (mock model, no AWS)"; \
+	$(MEDIA_ENV) $(PY) -m uvicorn api.main:app --port $(MEDIA_API_PORT) \
+	  > media/out/api.log 2>&1 & \
+	echo "  web   :$(MEDIA_WEB_PORT)"; \
+	(cd web && npm run dev -- --port $(MEDIA_WEB_PORT) > ../media/out/web.log 2>&1) & \
+	for i in $$(seq 1 60); do curl -sf $(MEDIA_API)/porch >/dev/null 2>&1 && break || sleep 1; done; \
+	for i in $$(seq 1 60); do curl -sf $(MEDIA_BASE)/ >/dev/null 2>&1 && break || sleep 1; done; \
+	curl -sf $(MEDIA_API)/porch >/dev/null || { echo "the API never came up (media/out/api.log)" >&2; exit 1; }; \
+	curl -sf $(MEDIA_BASE)/ >/dev/null || { echo "the UI never came up (media/out/web.log)" >&2; exit 1; }; \
+	curl -sf -X POST $(MEDIA_API)/demo/reset >/dev/null; \
+	echo; \
+	$(PY) media/tts.py; \
+	BASE=$(MEDIA_BASE) API=$(MEDIA_API) node media/record.mjs; \
+	node media/render-cards.mjs; \
+	node media/code-cards.mjs; \
+	$(PY) media/assemble.py

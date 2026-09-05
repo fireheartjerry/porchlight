@@ -81,7 +81,15 @@ setInterval(() => {
 
 /* ---------------------------------------------------------------- helpers */
 
-function addLog({ agent, kind, summary, detail = {}, request_id = null, autonomous = true }) {
+function addLog({
+  agent,
+  kind,
+  summary,
+  detail = {},
+  request_id = null,
+  autonomous = true,
+  visible = true,
+}) {
   const entry = {
     id: newId('log'),
     ts: now(),
@@ -91,6 +99,8 @@ function addLog({ agent, kind, summary, detail = {}, request_id = null, autonomo
     summary,
     detail,
     autonomous,
+    // Housekeeping rows (lookups, reads) are hidden on the porch unless ?all=1 asks.
+    visible,
   }
   state.log.unshift(entry)
   emit({ type: 'log', request_id, agent, summary, detail: { ...detail, kind, log_id: entry.id } })
@@ -595,7 +605,7 @@ const server = createServer(async (req, res) => {
       status_line: statusLine(),
       light_on: state.decisions.some((d) => d.status === 'open'),
       open_decisions: state.decisions.filter((d) => d.status === 'open'),
-      quiet_log: state.log.slice(0, 60),
+      quiet_log: (url.searchParams.get('all') ? state.log : state.log.filter((e) => e.visible)).slice(0, 60),
       stats: stats(),
       group: state.settings,
     })

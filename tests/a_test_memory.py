@@ -242,7 +242,7 @@ def test_make_memory_store_picks_sqlite_in_demo_mode():
 
 def test_make_memory_store_picks_agentcore_when_live_with_a_memory_id():
     store = make_memory_store(
-        Settings(mode="live", sqlite_path=":memory:", memory_id="mem-123", aws_region="us-west-2")
+        Settings(mode="live", sqlite_path=":memory:", memory_id="mem-123", aws_region="us-east-1")
     )
     assert isinstance(store, AgentCoreMemoryStore)
     assert store.memory_id == "mem-123"
@@ -278,7 +278,7 @@ class FakeMemoryClient:
 
 
 def test_agentcore_store_never_builds_a_client_until_used():
-    store = AgentCoreMemoryStore("mem-123", "us-west-2")
+    store = AgentCoreMemoryStore("mem-123", "us-east-1")
     assert store._client is None
     assert store.namespace_for("vol_maria") == "/porchlight/vol_maria/"
     assert store.namespace_for(None) == "/porchlight/group/"

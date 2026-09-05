@@ -43,12 +43,14 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   return (
     <ToastContext.Provider value={value}>
       {children}
+      {/* Top right, under the sticky header: the Inbox composer's send button owns the
+          bottom-right corner, and a toast landing on it hid the thing you just clicked. */}
       <div
         role="status"
         aria-live="polite"
         aria-atomic="false"
         aria-label="Notifications"
-        className="pointer-events-none fixed inset-x-0 bottom-0 z-50 flex flex-col items-center gap-2 px-4 pb-[calc(env(safe-area-inset-bottom)+5.25rem)] sm:items-end sm:px-6 sm:pb-6"
+        className="pointer-events-none fixed inset-x-0 top-0 z-50 flex flex-col items-center gap-2 px-4 pt-[5.25rem] sm:items-end sm:px-6"
       >
         {toasts.map((toast) => (
           <div

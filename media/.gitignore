@@ -1,0 +1,7 @@
+# Everything the pipeline renders is regenerable from `make video`: the shot MP4s, the WEBM
+# screencasts, the 4–9 MB card PNGs, the voiceover WAVs, and the 80 MB cut itself.
+out/*
+
+# ...except the thumbnail, which is a deliverable in its own right (the 3:2 still the submission
+# needs) and small enough to keep in the repo.
+!out/thumbnail.png

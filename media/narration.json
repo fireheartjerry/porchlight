@@ -1,0 +1,119 @@
+{
+  "$comment": "The voiceover script, one entry per shot (docs/VIDEO.md). `kind` says where the picture comes from: card = media/out/cards/<id>.png, code = media/out/code/<id>.png, clip = media/out/clips/<id>.webm. `text` is spoken by media/tts.py and split into burned-in captions by media/assemble.py.",
+  "voice": {
+    "say": {
+      "voice": "Samantha",
+      "rate": 175,
+      "words_per_second": 2.87
+    },
+    "polly": {
+      "voice": "Matthew",
+      "engine": "long-form",
+      "fallback_engine": "neural"
+    }
+  },
+  "tail_seconds": 0.6,
+  "shots": [
+    {
+      "id": "01-title",
+      "kind": "card",
+      "title": "Title card — the problem",
+      "text": "Every mutual aid group, every food pantry, every volunteer team runs on one exhausted coordinator. Requests arrive by text, by email, by web form, and on paper slips pushed under a door. And every single one of them turns into the same job. Work out who can help. Ask three people. Wait. Ask two more. Confirm it. Send a reminder. Follow up when nobody replies. Forty times a week, after her own work day is already over. That is why coordinators burn out, and why good groups quietly fold.",
+      "card": "01-title",
+      "ken": {
+        "from": 1.0,
+        "to": 1.08
+      }
+    },
+    {
+      "id": "02-track",
+      "kind": "card",
+      "title": "Track card — Good Neighbor Agents",
+      "text": "This is Porchlight, our entry for the Good Neighbor track. It is an autonomous dispatcher for neighborhood mutual aid: software that does the coordinator's job, for the coordinator, so the group keeps running on the nights she needs off.",
+      "card": "02-track",
+      "ken": {
+        "from": 1.0,
+        "to": 1.06,
+        "x": 0.42
+      }
+    },
+    {
+      "id": "03-porch-quiet",
+      "kind": "clip",
+      "title": "The Porch, all quiet",
+      "text": "Porchlight runs the whole loop in the background, and it makes the safe calls itself. It only turns the porch light on when a decision genuinely needs a person. Right now nothing does, so the lantern is dim and the porch says: all quiet."
+    },
+    {
+      "id": "04-dialysis",
+      "kind": "clip",
+      "title": "A ride to dialysis, handled end to end",
+      "text": "Here is a request exactly as it arrives: a text message, in ordinary English. Watch the trace on the right. The intake agent turns it into a structured job. Category, time window, zone, and the detail that actually matters. The matcher scores every volunteer on skills, distance, availability and fairness, and it recalls what the group has learned about them. Outreach writes to the best fit, in the group's own voice, and waits. If that person had said no, it would work down the shortlist on its own. Someone says yes. The steward confirms with the family and schedules a reminder for the night before. Nobody had to touch it. It lands in the Quiet Log, with the reasoning, in plain English."
+    },
+    {
+      "id": "05-safety",
+      "kind": "clip",
+      "title": "The safety card — the autonomy boundary",
+      "text": "Now a very different message: a child home alone, and a neighbor who can smell gas. Intake flags it, and the policy layer stops everything before a single volunteer is contacted. This is the whole idea. Porchlight's autonomy boundary is explicit code. A Strands intervention that returns Confirm, which raises an interrupt. That interrupt is the Decision Card. It carries the context, a recommendation, and options. It is persisted, so the coordinator can answer hours later from her phone, and the agent graph resumes exactly where it paused. Danger, money, vetting a stranger who wants someone inside a home, a job nobody can cover. Those come to a human. Everything else stays quiet."
+    },
+    {
+      "id": "06-tuesday",
+      "kind": "clip",
+      "title": "A whole Tuesday, and the roster",
+      "text": "Here is a whole Tuesday. Twelve requests, start to finish, in about the time it takes to read this sentence. Most of them handled without anybody being asked. The few that surfaced arrived with options attached, not homework. And look at the volunteers. The load is spread, nobody is quietly burning out, the vetted ones are marked, and the memory notes keep growing, so next week's matches are better than this week's."
+    },
+    {
+      "id": "07-architecture",
+      "kind": "card",
+      "title": "Architecture card",
+      "text": "Under the hood it is Strands Agents, end to end. Five agents with structured outputs: intake, matcher, outreach, steward and briefer. Orchestrated as a Strands Graph with conditional edges and a bounded retry loop. Hooks write the audit trail. M C P serves the data tools. A memory manager keeps what the group learns.",
+      "card": "03-architecture",
+      "ken": {
+        "from": 1.0,
+        "to": 1.34,
+        "x": 0.6,
+        "y": 0.4
+      }
+    },
+    {
+      "id": "08-code-policy",
+      "kind": "code",
+      "title": "policy.py — before_tool_call",
+      "text": "The autonomy boundary is one function. Before every tool call, the policy intervention decides: allow it, guide it, rewrite it, or stop and ask. Confirm is the Decision Card, and it is the only thing standing between an agent and a phone call to a stranger.",
+      "ken": {
+        "from": 1.0,
+        "to": 1.03
+      }
+    },
+    {
+      "id": "09-code-graph",
+      "kind": "code",
+      "title": "graph.py — GraphBuilder",
+      "text": "The orchestration is a Strands GraphBuilder. A node for each agent, conditional edges that route on what the last agent actually returned, and a retry loop that widens the volunteer pool instead of giving up on the first refusal.",
+      "ken": {
+        "from": 1.0,
+        "to": 1.03
+      }
+    },
+    {
+      "id": "10-code-runtime",
+      "kind": "code",
+      "title": "runtime.py — BedrockAgentCoreApp",
+      "text": "And it ships as a Bedrock AgentCore app. AgentCore Runtime hosts the graph, AgentCore Memory holds the long term notes, Observability traces land in CloudWatch, Claude Sonnet and Haiku do the thinking on Bedrock, and an EventBridge sweep handles the follow ups and the escalations while everybody sleeps.",
+      "ken": {
+        "from": 1.0,
+        "to": 1.03
+      }
+    },
+    {
+      "id": "11-closing",
+      "kind": "card",
+      "title": "Closing card",
+      "text": "Coordinators don't quit because the work is hard. They quit because it never stops. Porchlight gives them back their evenings, and keeps the decisions that matter human. Porchlight: it runs the coordination, and lights up only when you're needed. The code is on GitHub, and the live demo is linked from the README.",
+      "card": "04-closing",
+      "ken": {
+        "from": 1.06,
+        "to": 1.0
+      }
+    }
+  ]
+}

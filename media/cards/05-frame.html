@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Porchlight — screen plate</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght,SOFT,WONK@9..144,300..800,0..100,0..1&family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="card.css">
+</head>
+<body>
+  <!--
+    The plate every UI clip sits on. The rounded rectangle is exactly where
+    media/assemble.py overlays the 1440×900 screencast at its native size (240, 10), so
+    the CSS drop shadow lands behind the recording and nothing has to be faked
+    in ffmpeg. The bottom 170px is left clear for the burned-in captions.
+  -->
+  <div class="stage" style="padding:0">
+    <div style="position:absolute;left:240px;top:10px;width:1440px;height:900px;border-radius:18px;
+                background:#0b1020;
+                box-shadow:0 60px 130px -34px rgba(0,0,0,0.92), 0 0 0 1px rgba(255,179,71,0.20), 0 0 90px -20px rgba(255,179,71,0.16)"></div>
+  </div>
+</body>
+</html>

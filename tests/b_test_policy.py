@@ -446,8 +446,10 @@ def test_audit_hook_writes_the_quiet_log(ctx: AppContext) -> None:
     )
 
     entries = ctx.store.list_log(request_id=request.id)
-    assert entries and entries[0].summary.startswith("send_message")
-    assert entries[0].agent == "outreach"
+    assert entries and entries[0].agent == "outreach"
+    # The hook words the row the way the tool would, and leaves the visible copy to the tool.
+    assert "send_message" not in entries[0].summary
+    assert entries[0].visible is False
     types = [event["type"] for event in ctx.emitted]  # type: ignore[attr-defined]
     assert "tool_call" in types and "tool_result" in types
 

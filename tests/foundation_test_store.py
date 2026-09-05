@@ -35,7 +35,7 @@ def test_sqlite_store_satisfies_the_protocol(empty_store: SqliteStore) -> None:
 def test_make_store_picks_backend_from_settings() -> None:
     sqlite = make_store(Settings(store="sqlite", sqlite_path=":memory:"))
     assert isinstance(sqlite, SqliteStore)
-    dynamo = make_store(Settings(store="dynamo", dynamo_table="t", aws_region="us-west-2"))
+    dynamo = make_store(Settings(store="dynamo", dynamo_table="t", aws_region="us-east-1"))
     assert isinstance(dynamo, DynamoStore)
     assert dynamo.table_name == "t"
 
@@ -281,6 +281,6 @@ def test_store_is_usable_from_several_threads(empty_store: SqliteStore) -> None:
 
 
 def test_dynamo_store_does_not_touch_aws_on_construction() -> None:
-    store = DynamoStore(table="porchlight", region="us-west-2")
+    store = DynamoStore(table="porchlight", region="us-east-1")
     assert store._table is None
     assert "porchlight" in repr(store)

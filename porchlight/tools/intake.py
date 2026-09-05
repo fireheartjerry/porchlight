@@ -11,6 +11,7 @@ from strands.types.tools import ToolContext
 from ..context import AppContext, get_ctx
 from ..models import OPEN_STATUSES, AidRequest, Category, Requester, jsonable
 from ._common import agent_name, trace
+from .summaries import describe_tool
 
 HISTORY_LIMIT = 10
 SIMILAR_LIMIT = 5
@@ -41,19 +42,23 @@ def lookup_requester_history_impl(
     ctx: AppContext, contact_or_name: str, *, agent: str | None = None, limit: int = HISTORY_LIMIT
 ) -> dict[str, Any]:
     """Look up a requester and their recent requests (the plain-function form)."""
+    args = {"contact_or_name": contact_or_name}
     requester = _find_requester(ctx, contact_or_name)
     if requester is None:
-        trace(ctx, "tool_call", f"no history for {contact_or_name!r} — first-time requester", agent=agent)
-        return {"requester": None, "recent_requests": []}
+        empty: dict[str, Any] = {"requester": None, "recent_requests": []}
+        summary = describe_tool(ctx, "lookup_requester_history", args, empty).summary
+        trace(ctx, "tool_call", summary, agent=agent)
+        return empty
     recent = [r for r in ctx.store.list_requests(limit=200) if r.requester_id == requester.id][:limit]
+    payload = {"requester": jsonable(requester), "recent_requests": jsonable(recent)}
     trace(
         ctx,
         "tool_call",
-        f"{requester.name} has {len(recent)} request(s) on file",
+        describe_tool(ctx, "lookup_requester_history", args, payload).summary,
         agent=agent,
-        detail={"requester_id": requester.id},
+        detail={"requester_id": requester.id, "history": len(recent)},
     )
-    return {"requester": jsonable(requester), "recent_requests": jsonable(recent)}
+    return payload
 
 
 @tool(context=True)
@@ -121,15 +126,7 @@ def find_similar_open_requests_impl(
             exclude_id=exclude_request_id,
         )
     ][:SIMILAR_LIMIT]
-    trace(
-        ctx,
-        "tool_call",
-        f"{len(matches)} open request(s) already on file for this neighbour"
-        + (f" in the last {hours}h" if hours else ""),
-        agent=agent,
-        detail={"requester_id": requester_id, "category": category, "count": len(matches)},
-    )
-    return [
+    rows = [
         {
             "request_id": request.id,
             "summary": request.summary,
@@ -141,6 +138,15 @@ def find_similar_open_requests_impl(
         }
         for request in matches
     ]
+    args = {"requester_id": requester_id, "category": category, "window_hours": hours}
+    trace(
+        ctx,
+        "tool_call",
+        describe_tool(ctx, "find_similar_open_requests", args, rows).summary,
+        agent=agent,
+        detail={"requester_id": requester_id, "category": category, "count": len(rows)},
+    )
+    return rows
 
 
 @tool(context=True)

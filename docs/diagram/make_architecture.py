@@ -1,6 +1,11 @@
-"""Render docs/architecture.png with the `diagrams` library (needs graphviz `dot`).
+"""Alternative, auto-generated architecture diagram (needs the `diagrams` lib + graphviz `dot`).
 
-Run:  python docs/diagram/make_architecture.py
+The README ships the hand-authored ``docs/architecture.svg`` instead — see
+``docs/diagram/render.mjs``, which rasterises it to ``docs/architecture.png`` at 2x with
+Playwright. This script is kept as a second opinion on the topology and deliberately writes
+somewhere else so it can never overwrite the hand-made pair.
+
+Run:  python docs/diagram/make_architecture.py   ->  docs/diagram/architecture-generated.{png,svg}
 """
 
 from __future__ import annotations
@@ -18,7 +23,7 @@ from diagrams.aws.storage import S3
 from diagrams.onprem.client import User, Users
 from diagrams.programming.framework import React
 
-OUT = Path(__file__).resolve().parents[1] / "architecture"
+OUT = Path(__file__).resolve().parent / "architecture-generated"
 
 GRAPH_ATTR = {
     "fontsize": "22",

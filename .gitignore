@@ -13,7 +13,7 @@ agentcore/.env.local
 cdk.out/
 *.zip
 .DS_Store
-data/sessions/
+data/sessions*/
 data/local/
 *.log
 coverage/

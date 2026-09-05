@@ -444,6 +444,10 @@ class LogEvent(_Base):
     summary: str = ""
     detail: dict[str, Any] = Field(default_factory=dict)
     autonomous: bool = True
+    visible: bool = Field(
+        default=True,
+        description="False for bookkeeping (lookups, reads) the Quiet Log hides by default",
+    )
 
 
 class OutboundMessage(_Base):

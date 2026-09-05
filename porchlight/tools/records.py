@@ -17,11 +17,11 @@ from ..models import (
     jsonable,
 )
 from ._common import agent_name, error, parse_iso, record, trace
+from .summaries import describe_tool
 
 VALID_OUTCOMES: frozenset[str] = frozenset(get_args(AttemptOutcome))
 CLOSING_STATUSES: frozenset[str] = frozenset({"completed", "cancelled", "declined"})
 MEMORY_RECALL_LIMIT = 5
-SUMMARY_CHARS = 100
 
 
 # --------------------------------------------------------------------------------------
@@ -42,8 +42,15 @@ def assign_volunteer_impl(
 
     now = ctx.clock.now()
     # Two atomic writes rather than one whole-row rewrite: another thread recording an attempt
-    # or updating a different field at the same moment keeps its work.
-    ctx.store.resolve_attempt(request_id, Attempt(volunteer_id=volunteer_id, sent_at=now, outcome="accepted"))
+    # or updating a different field at the same moment keeps its work. The attempt is only
+    # written when this volunteer's answer has not been recorded yet — otherwise the drawer
+    # shows the same person accepting twice, once with their reply and once without it.
+    if not any(
+        attempt.volunteer_id == volunteer_id and attempt.outcome == "accepted" for attempt in request.attempts
+    ):
+        ctx.store.resolve_attempt(
+            request_id, Attempt(volunteer_id=volunteer_id, sent_at=now, outcome="accepted")
+        )
     updated = ctx.store.update_request_fields(
         request_id,
         assigned_volunteer_id=volunteer_id,
@@ -56,13 +63,15 @@ def assign_volunteer_impl(
     volunteer.stats.last_active = now
     ctx.store.put_volunteer(volunteer)
 
+    note = describe_tool(ctx, "assign_volunteer", {"request_id": request_id, "volunteer_id": volunteer_id})
     record(
         ctx,
         LogKind.TOOL_CALL,
-        f"{volunteer.name} is confirmed for {request.summary or request.category}",
+        note.summary,
         request_id=request_id,
         agent=agent,
-        detail={"volunteer_id": volunteer_id, "status": str(request.status)},
+        visible=note.visible,
+        detail={"volunteer_id": volunteer_id, "volunteer": volunteer.name, "status": str(request.status)},
     )
     return {"request_id": request_id, "volunteer_id": volunteer_id, "status": str(request.status)}
 
@@ -102,13 +111,16 @@ def record_attempt_impl(
         ctx.store.put_volunteer(volunteer)
 
     who = volunteer.name if volunteer else volunteer_id
+    args = {"request_id": request_id, "volunteer_id": volunteer_id, "outcome": outcome, "note": note}
+    described = describe_tool(ctx, "record_attempt", args)
     record(
         ctx,
         LogKind.TOOL_CALL,
-        f"{who} {outcome}" + (f" — {note[:SUMMARY_CHARS]}" if note else ""),
+        described.summary,
         request_id=request_id,
         agent=agent,
-        detail={"volunteer_id": volunteer_id, "outcome": outcome, "note": note},
+        visible=described.visible,
+        detail={"volunteer_id": volunteer_id, "volunteer": who, "outcome": outcome, "reply": note},
     )
     return {"request_id": request_id, "attempts": len(request.attempts), "outcome": outcome}
 
@@ -144,12 +156,14 @@ def update_request_impl(
         return error(f"invalid update: {exc}")
     if updated is None:
         return error(f"unknown request {request_id}")
+    note = describe_tool(ctx, "update_request", {"request_id": request_id, "fields": jsonable(fields)})
     record(
         ctx,
         LogKind.TOOL_CALL,
-        "Updated " + ", ".join(sorted(fields)) + f" on {updated.summary or updated.category}",
+        note.summary,
         request_id=request_id,
         agent=agent,
+        visible=note.visible,
         detail={"fields": jsonable(fields)},
     )
     return jsonable(updated)
@@ -187,12 +201,16 @@ def close_request_impl(
         requester.history_count += 1
         ctx.store.put_requester(requester)
 
+    described = describe_tool(
+        ctx, "close_request", {"request_id": request_id, "outcome": outcome, "note": note}
+    )
     record(
         ctx,
         LogKind.TOOL_CALL,
-        f"Closed as {outcome}: {note or request.summary or request.category}",
+        described.summary,
         request_id=request_id,
         agent=agent,
+        visible=described.visible,
         detail={"outcome": outcome, "note": note},
     )
     return {"request_id": request_id, "status": str(request.status)}
@@ -213,15 +231,15 @@ def recall_memory_impl(
 ) -> list[dict[str, Any]]:
     """Search long-term memory (the plain-function form)."""
     if ctx.memory is None:
-        trace(ctx, "tool_call", "long-term memory is not configured", agent=agent)
+        trace(ctx, "tool_call", "No long-term memory is configured, so nothing to recall.", agent=agent)
         return []
     entries = search_memory(ctx.memory, query, about=about, limit=limit)
     trace(
         ctx,
         "tool_call",
-        f"recalled {len(entries)} note(s) for {query!r}",
+        describe_tool(ctx, "recall_memory", {"query": query, "about": about}, entries).summary,
         agent=agent,
-        detail={"about": about, "count": len(entries)},
+        detail={"about": about, "query": query, "count": len(entries)},
     )
     return entries
 
@@ -259,12 +277,14 @@ def remember_impl(
                     requester.notes.append(text)
                     ctx.store.put_requester(requester)
                 pinned = True
-    note = "" if ctx.memory is not None else " (no long-term memory configured)"
+    described = describe_tool(ctx, "remember", {"content": text, "about_id": about_id, "kind": kind})
+    tail = "" if ctx.memory is not None else " (no long-term memory configured)"
     record(
         ctx,
         LogKind.MEMORY,
-        f"Remembered: {text[:SUMMARY_CHARS]}{note}",
+        described.summary + tail,
         agent=agent,
+        visible=described.visible,
         detail={"about_id": about_id, "kind": kind, "stored": stored, "pinned": pinned},
     )
     return {"stored": stored or pinned, "content": text, "about_id": about_id}
@@ -291,8 +311,9 @@ def query_requests_impl(
     since = parse_iso(since_iso)
     if since is not None:
         requests = [r for r in requests if r.created_at >= since]
-    trace(ctx, "tool_call", f"read {len(requests)} request(s)", agent=agent)
-    return [jsonable(r) for r in requests]
+    rows = [jsonable(r) for r in requests]
+    trace(ctx, "tool_call", describe_tool(ctx, "query_requests", {}, rows).summary, agent=agent)
+    return rows
 
 
 def query_log_impl(
@@ -305,8 +326,15 @@ def query_log_impl(
 ) -> list[dict[str, Any]]:
     """Read the quiet log, newest first (the plain-function form)."""
     events = ctx.store.list_log(request_id=request_id, limit=limit, since=parse_iso(since_iso))
-    trace(ctx, "tool_call", f"read {len(events)} log event(s)", request_id=request_id, agent=agent)
-    return [jsonable(e) for e in events]
+    rows = [jsonable(e) for e in events]
+    trace(
+        ctx,
+        "tool_call",
+        describe_tool(ctx, "query_log", {}, rows).summary,
+        request_id=request_id,
+        agent=agent,
+    )
+    return rows
 
 
 # --------------------------------------------------------------------------------------

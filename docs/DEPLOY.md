@@ -181,10 +181,10 @@ python agentcore/deployed_state.py --key PORCHLIGHT_MEMORY_ID
 Gitignored, and the two halves merge into it rather than overwriting each other:
 
 ```
-PORCHLIGHT_AGENT_RUNTIME_ARN=arn:aws:bedrock-agentcore:us-west-2:…:runtime/porchlight_Porchlight-XXXXXXXX
+PORCHLIGHT_AGENT_RUNTIME_ARN=arn:aws:bedrock-agentcore:us-east-1:…:runtime/porchlight_Porchlight-XXXXXXXX
 PORCHLIGHT_MEMORY_ID=PorchlightMemory-XXXXXXXXXX
 PORCHLIGHT_CLOUDFRONT_URL=https://dxxxxxxxxxxxxx.cloudfront.net
-PORCHLIGHT_FUNCTION_URL=https://xxxxxxxx.lambda-url.us-west-2.on.aws/
+PORCHLIGHT_FUNCTION_URL=https://xxxxxxxx.lambda-url.us-east-1.on.aws/
 PORCHLIGHT_DYNAMO_TABLE=porchlight
 PORCHLIGHT_SESSION_BUCKET=porchlight-sessions-<account>-<region>
 PORCHLIGHT_DISTRIBUTION_ID=EXXXXXXXXXXXXX
@@ -417,7 +417,7 @@ Set with `-c key=value`, defaults in [`infra/cdk.json`](../infra/cdk.json):
 | `lwaLayerVersion` | `28` | Lambda Web Adapter layer version |
 | `apiMemoryMb` / `sweepMemoryMb` | `1536` / `1024` | |
 | `sweepRateMinutes` / `briefCron` | `60` / `cron(0 6 * * ? *)` | |
-| `account` / `region` | from `CDK_DEFAULT_*` | Falls back to `123050168750` / `us-west-2` so `cdk synth` works with no credentials |
+| `account` / `region` | from `CDK_DEFAULT_*` | Falls back to `892077329800` / `us-east-1` so `cdk synth` works with no credentials |
 
 ### Building the Lambda bundle — no Docker
 
@@ -455,7 +455,7 @@ extensions are `aarch64-linux-gnu` rather than the host's.
 make synth        # or: cd infra && npx cdk synth
 ```
 
-This always works: the account/region fall back to `123050168750` / `us-west-2`, a missing
+This always works: the account/region fall back to `892077329800` / `us-east-1`, a missing
 `build/lambda` synthesises a stub asset with a warning, and a missing `web/dist` skips the bucket
 deployment with a warning. Nothing in the app touches AWS at synth time.
 
@@ -559,9 +559,9 @@ else in the code has to know that name.
 ```
 PORCHLIGHT_MODE=live                PORCHLIGHT_MODEL_PROVIDER=bedrock
 PORCHLIGHT_STORE=dynamo             PORCHLIGHT_TOOLS=local
-PORCHLIGHT_EVENTS_SOURCE=store      PORCHLIGHT_AWS_REGION=us-west-2
+PORCHLIGHT_EVENTS_SOURCE=store      PORCHLIGHT_AWS_REGION=us-east-1
 PORCHLIGHT_DYNAMO_TABLE=porchlight
-PORCHLIGHT_SESSION_BUCKET=porchlight-sessions-123050168750-us-west-2
+PORCHLIGHT_SESSION_BUCKET=porchlight-sessions-892077329800-us-east-1
 PORCHLIGHT_MODEL_SONNET=global.anthropic.claude-sonnet-4-6
 PORCHLIGHT_MODEL_HAIKU=global.anthropic.claude-haiku-4-5-20251001-v1:0
 PORCHLIGHT_GROUP_NAME="Maple Street Mutual Aid"   PORCHLIGHT_TIMEZONE=America/Toronto

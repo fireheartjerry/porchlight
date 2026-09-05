@@ -1,0 +1,154 @@
+/*
+ * The Porch visual language, ported from web/src/index.css and
+ * web/tailwind.config.js so the title cards and the screen recording look like
+ * the same evening (docs/UI.md §Personality).
+ *
+ * Every card is exactly 1920×1080 (the thumbnail is 1920×1280) and is rendered
+ * by media/render-cards.mjs at deviceScaleFactor 2, so assemble.py can crop a
+ * pixel-perfect 1920×1080 window out of the 2× PNG while the Ken Burns move
+ * runs. Fonts come from Google Fonts with real fallbacks — if the network is
+ * down, Georgia/Helvetica still lay the card out.
+ */
+
+:root {
+  --porch-950: #070b15;
+  --porch-900: #0b1020;
+  --porch-800: #141a33;
+  --porch-700: #1f2747;
+  --lamp: #f59e0b;
+  --lamp-glow: #ffb347;
+  --lamp-wash: #ffd9a0;
+  --cream: #f4efe6;
+  --cream-dim: #cbc4b8;
+  --cream-faint: #ada79e;
+  --sage: #8fb996;
+  --ember: #ff6b6b;
+  --lilac: #b39ddb;
+  --dusk: #7fa9d8;
+  /* How strong the porch light burns on this card. */
+  --lamp-strength: 1;
+}
+
+* { box-sizing: border-box; }
+
+html, body { margin: 0; padding: 0; background: var(--porch-900); }
+
+body {
+  width: 1920px;
+  height: 1080px;
+  overflow: hidden;
+  position: relative;
+  color: var(--cream);
+  font-family: Inter, 'Helvetica Neue', Arial, sans-serif;
+  font-size: 20px;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+body.tall { height: 1280px; }
+
+/* The night itself — the same gradient stack the app paints behind everything. */
+body::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  background:
+    radial-gradient(78rem 54rem at 12% -6%, rgba(255, 179, 71, calc(0.1 + var(--lamp-strength) * 0.3)), transparent 62%),
+    radial-gradient(52rem 40rem at 104% 8%, rgba(127, 169, 216, 0.1), transparent 60%),
+    radial-gradient(94rem 66rem at 50% 118%, rgba(20, 26, 51, 0.9), transparent 70%),
+    linear-gradient(168deg, #0b1020 0%, #101731 46%, #0a0f1e 100%);
+}
+
+/* Film grain + vignette, so the flats do not look like plastic on a big screen. */
+body::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  pointer-events: none;
+  opacity: 0.4;
+  background-image:
+    radial-gradient(120% 100% at 50% 45%, transparent 50%, rgba(3, 6, 14, 0.78) 100%),
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.82' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='180' height='180' filter='url(%23n)' opacity='0.42'/%3E%3C/svg%3E");
+  background-size: 100% 100%, 180px 180px;
+  mix-blend-mode: soft-light;
+}
+
+.stage {
+  position: relative;
+  z-index: 2;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: 0 160px;
+}
+
+h1, h2, h3 {
+  font-family: Fraunces, Georgia, 'Times New Roman', serif;
+  font-variation-settings: 'SOFT' 28, 'WONK' 1;
+  font-weight: 500;
+  letter-spacing: -0.015em;
+  line-height: 1.08;
+  margin: 0;
+}
+
+.eyebrow {
+  font-size: 22px;
+  letter-spacing: 0.28em;
+  text-transform: uppercase;
+  color: var(--cream-faint);
+  font-weight: 500;
+}
+
+.wordmark { font-size: 132px; color: var(--cream); }
+.headline { font-size: 76px; color: var(--cream); }
+.sub {
+  font-family: Fraunces, Georgia, serif;
+  font-size: 38px;
+  line-height: 1.35;
+  color: var(--lamp-wash);
+  font-style: italic;
+  margin: 0;
+}
+.body { font-size: 30px; color: var(--cream-dim); max-width: 46ch; }
+.faint { color: var(--cream-faint); }
+
+/* The lantern glyph, at card scale, with its halo. */
+.lantern { position: relative; display: inline-flex; align-items: center; justify-content: center; }
+.lantern .halo {
+  position: absolute;
+  inset: -80%;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(255,179,71,0.40) 0%, rgba(255,179,71,0.14) 38%, rgba(255,179,71,0) 68%);
+}
+.lantern svg { position: relative; }
+
+.rule {
+  height: 1px;
+  background: linear-gradient(90deg, rgba(245,158,11,0.55), rgba(245,158,11,0.06) 60%, transparent);
+  border: 0;
+  margin: 0;
+}
+
+.chips { display: flex; gap: 14px; flex-wrap: wrap; }
+.chip {
+  border: 1px solid rgba(255,255,255,0.11);
+  background: rgba(255,255,255,0.03);
+  color: var(--cream-dim);
+  border-radius: 999px;
+  padding: 10px 22px;
+  font-size: 22px;
+  letter-spacing: 0.02em;
+}
+.chip.lamp { border-color: rgba(245,158,11,0.42); background: rgba(245,158,11,0.11); color: var(--lamp-wash); }
+
+.mono {
+  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+  font-size: 27px;
+  letter-spacing: 0.01em;
+  color: var(--cream);
+}

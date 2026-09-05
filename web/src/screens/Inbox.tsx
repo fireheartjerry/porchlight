@@ -82,6 +82,9 @@ export function Inbox() {
   })
 
   const tuesday = useMutation({
+    // The SSE stream replays recent events on connect, so a finished run from
+    // earlier can still be on screen; clear it before this one starts talking.
+    onMutate: () => clearDemoProgress(),
     mutationFn: () => runDay(count),
     onSuccess: (result) =>
       toast.push({

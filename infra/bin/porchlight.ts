@@ -8,21 +8,21 @@
  *
  * Account and region resolution, in order:
  *
- *   account   `-c account=...` → CDK_DEFAULT_ACCOUNT → 123050168750 (a placeholder, so that
+ *   account   `-c account=...` → CDK_DEFAULT_ACCOUNT → 892077329800 (a placeholder, so that
  *             `npx cdk synth` works on a machine with no AWS credentials at all)
  *   region    `-c region=...` → CDK_DEFAULT_REGION (only when the CLI actually resolved an
  *             account; without credentials its region is a guess) → AWS_REGION →
- *             AWS_DEFAULT_REGION → us-west-2, the region the rest of Porchlight defaults to
+ *             AWS_DEFAULT_REGION → us-east-1, the region the rest of Porchlight defaults to
  */
 import 'source-map-support/register';
 import * as cdk from 'aws-cdk-lib';
 import { PorchlightStack } from '../lib/porchlight-stack';
 
 /** Placeholder account, used only when no credentials are configured (synth, CI). */
-const FALLBACK_ACCOUNT = '123050168750';
+const FALLBACK_ACCOUNT = '892077329800';
 
 /** Porchlight's home region — where Bedrock access and the AgentCore runtime are set up. */
-const FALLBACK_REGION = 'us-west-2';
+const FALLBACK_REGION = 'us-east-1';
 
 const app = new cdk.App();
 

@@ -239,8 +239,9 @@ request already in hand — you are the one who closes the loop instead:
 1. Send the requester one warm, short line with `send_message`. Thanks get thanked and passed on.
    A duplicate gets reassurance that the original is in hand, naming when it is booked for if it
    is booked.
-2. Call `close_request` with `outcome="cancelled"` and a one-line note saying which it was
-   ("thank-you note, no help needed" or "duplicate of req_...").
+2. Call `close_request` with `outcome="cancelled"` and a one-line note saying which it was, in
+   plain words the coordinator can read ("thank-you note, no help needed" or "already in hand,
+   asked twice"). Never put an id in that note.
 3. Return `outcome="cancelled"` with that same line as the summary.
 Do not message a volunteer, do not schedule a reminder, and do not write a memory note for these.
 
