@@ -7,7 +7,7 @@
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useCallback, useState, useSyncExternalStore } from 'react'
-import { getSamples, postInbox, qk, resetDemo, runDay } from '../api'
+import { getSamples, postInbox, qk, resetDemo } from '../api'
 import { Card } from '../components/Card'
 import { SectionLabel } from '../components/Card'
 import { EmptyState } from '../components/EmptyState'
@@ -18,14 +18,15 @@ import { OutcomePanel, OutcomeRow } from '../components/inbox/OutcomePanel'
 import { clearSends, getSends, pushSend, subscribeSends } from '../components/inbox/sendLog'
 import { SampleList } from '../components/inbox/SampleList'
 import { setOpenRequest } from '../components/requests/openRequest'
+import { useDayRun, type DayRunState } from '../hooks/useDayRun'
 import { useEvents } from '../hooks/useEvents'
 import { useToast } from '../hooks/useToast'
-import type { Sample, Source } from '../types'
+import type { DemoProgress, Sample, Source } from '../types'
 
 export function Inbox() {
   const queryClient = useQueryClient()
   const toast = useToast()
-  const { demoProgress, clearDemoProgress } = useEvents()
+  const { demoProgress } = useEvents()
 
   const samples = useQuery({ queryKey: qk.samples, queryFn: getSamples })
 
@@ -81,29 +82,34 @@ export function Inbox() {
       }),
   })
 
-  const tuesday = useMutation({
-    // The SSE stream replays recent events on connect, so a finished run from
-    // earlier can still be on screen; clear it before this one starts talking.
-    onMutate: () => clearDemoProgress(),
-    mutationFn: () => runDay(count),
-    onSuccess: (result) =>
+  // The run happens here, in the browser: one POST /api/inbox per sample, in order.
+  // A background task on the server would be frozen the moment its response was written.
+  const tuesday = useDayRun({
+    onOutcome: (sample, outcome) => {
+      pushSend(sample.label, outcome)
+      invalidateAll()
+    },
+    onError: (sample, error) =>
       toast.push({
-        title: 'Running a Tuesday.',
-        description: `${result.count} requests, start to finish. Watch the Trace.`,
-        tone: 'quiet',
-      }),
-    onError: (error) =>
-      toast.push({
-        title: 'The day wouldn’t start.',
+        title: `“${sample.label}” didn’t come back.`,
         description: error instanceof Error ? error.message : 'Unknown error',
         tone: 'bad',
       }),
+    onFinish: (state) => {
+      invalidateAll()
+      if (state.stopped && state.done === 0) return
+      toast.push({
+        title: state.stopped ? 'Tuesday stopped.' : 'Tuesday done.',
+        description: `${state.quiet} handled quietly, ${state.cards} needed you.`,
+        tone: state.cards > 0 ? 'warn' : 'good',
+      })
+    },
   })
 
   const reset = useMutation({
     mutationFn: resetDemo,
     onSuccess: () => {
-      clearDemoProgress()
+      tuesday.clear()
       clearSends()
       invalidateAll()
       toast.push({ title: 'Demo reset.', description: 'Fixtures reseeded.', tone: 'quiet' })
@@ -126,11 +132,12 @@ export function Inbox() {
       lede="Everything a group actually receives — a text, a form, a voicemail transcript, a photo of a paper slip. Drop one in and watch what Porchlight does with it."
     >
       <DayRunner
-        progress={demoProgress}
+        progress={tuesday.progress ?? fromServer(demoProgress)}
         count={count}
         onCountChange={setCount}
-        onRun={() => tuesday.mutate()}
-        running={tuesday.isPending}
+        onRun={() => tuesday.start(samples.data ?? [], count)}
+        onStop={tuesday.stop}
+        running={tuesday.running}
         onReset={() => reset.mutate()}
         resetting={reset.isPending}
         onGoToPorch={goToPorch}
@@ -200,6 +207,22 @@ export function Inbox() {
       </div>
     </Screen>
   )
+}
+
+/**
+ * `POST /api/demo/run_day` still exists for the local dev server and `scripts/run_day.py`.
+ * When someone drives a Tuesday that way instead of from this button, its `demo_progress`
+ * events fill the same bar — so watching from a second tab still shows the run.
+ */
+function fromServer(progress: DemoProgress | null): DayRunState | null {
+  if (!progress) return null
+  return {
+    ...progress,
+    failed: progress.failed ?? 0,
+    label: progress.label ?? null,
+    running: progress.done < progress.total,
+    stopped: false,
+  }
 }
 
 function summarise(text: string): string {

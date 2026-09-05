@@ -257,6 +257,18 @@ def test_the_deployed_halves_both_run_live_against_dynamodb(
     assert "PORCHLIGHT_STORE: 'dynamo'" in stack_source
 
 
+def test_the_deployed_halves_agree_about_the_channel(env_vars: dict[str, str], stack_source: str) -> None:
+    """The graph messages volunteers runtime-side; the sweep delivers Lambda-side. One channel."""
+    assert env_vars["PORCHLIGHT_CHANNEL"] == "sim"
+    assert "PORCHLIGHT_CHANNEL: 'sim'" in stack_source
+
+
+def test_the_deployed_halves_agree_about_quiet_hours(env_vars: dict[str, str], stack_source: str) -> None:
+    """An empty window on one half only would hold on one side and send on the other."""
+    assert env_vars["PORCHLIGHT_QUIET_HOURS"] == "[0,0]"
+    assert "PORCHLIGHT_QUIET_HOURS: '[0,0]'" in stack_source
+
+
 def test_the_stack_hands_the_api_the_runtime_arn_and_memory_id(stack_source: str) -> None:
     """The ARN handoff: `make deploy-runtime` writes it, `make deploy-infra` passes it here."""
     assert "PORCHLIGHT_AGENT_RUNTIME_ARN: runtimeArn" in stack_source

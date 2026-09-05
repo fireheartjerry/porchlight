@@ -43,6 +43,7 @@ from porchlight.orchestrator import (
     GraphUnavailableError,
     Orchestrator,
     RunOutcome,
+    RuntimeInvocationError,
     SweepOutcome,
     graph_available,
     make_orchestrator,
@@ -120,7 +121,7 @@ def seed_if_empty(ctx: AppContext) -> None:
         return
     if ctx.store.list_volunteers():
         return
-    counts = seed_store(ctx.store, ctx.clock)
+    counts = seed_store(ctx.store, ctx.clock, ctx.settings)
     logger.info("seeded demo fixtures: %s", counts)
 
 
@@ -258,11 +259,20 @@ def _parse_since(value: str | None) -> datetime | None:
 
 
 async def _run(orchestrator_call: Callable[[], Any]) -> Any:
-    """Run a blocking orchestrator call off the event loop, mapping failures to HTTP errors."""
+    """Run a blocking orchestrator call off the event loop, mapping failures to HTTP errors.
+
+    A runtime that answered but refused the work is a bad gateway, not a bad request: the
+    caller did nothing wrong and retrying may well work. Answering ``200`` with an empty
+    outcome — which is what happened before :func:`unwrap_runtime_result` existed — is the one
+    thing this must never do.
+    """
     try:
         return await run_in_threadpool(orchestrator_call)
     except GraphUnavailableError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except RuntimeInvocationError as exc:
+        logger.error("the agent runtime refused the invocation: %s", exc)
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
 # --------------------------------------------------------------------------------------
@@ -426,6 +436,7 @@ def create_app(
             version=__version__,
             model_provider=ctx.settings.model_provider,
             store=ctx.settings.store,
+            channel=ctx.settings.channel_kind,
             orchestrator=type(_orch(request)).__name__,
             graph_available=graph_available(),
         )

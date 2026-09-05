@@ -298,12 +298,15 @@ export interface Sample {
   text: string
   expected: 'quiet' | 'card'
   source?: Source
+  contact?: string | null
 }
 
 export interface Health {
   status: string
   mode: string
   version?: string
+  /** `sim` when volunteers are role-played by the simulator, `email` when messaged for real. */
+  channel?: string
 }
 
 export interface Brief {
@@ -332,8 +335,16 @@ export interface TraceEvent {
   agent: string | null
   summary: string
   detail: Record<string, unknown>
+  /** Position in the persisted trace. Present on store-sourced events, null in-process. */
+  cursor?: number | null
   /** Assigned client-side on receipt so React lists have a stable key. */
   seq?: number
+}
+
+/** `GET /api/events/poll` — the polling twin of the SSE stream. */
+export interface EventsPage {
+  events: TraceEvent[]
+  cursor: number
 }
 
 export interface DemoProgress {
@@ -341,6 +352,13 @@ export interface DemoProgress {
   total: number
   quiet: number
   cards: number
+  /** Requests the run could not finish — a gateway timeout, a refusal from the runtime. */
+  failed?: number
+  /** What is being worked on right now, for the progress line. */
+  label?: string | null
 }
 
 export type ConnectionState = 'connecting' | 'open' | 'closed'
+
+/** How the trace is reaching the browser: the SSE stream, or `/api/events/poll`. */
+export type EventTransport = 'sse' | 'poll'

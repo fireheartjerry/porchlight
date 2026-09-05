@@ -11,7 +11,14 @@ Entry for the AWS *Agents for Humans* hackathon — **Good Neighbor** track.
 [![License: MIT](https://img.shields.io/badge/license-MIT-1f6feb.svg)](LICENSE)
 [![Built with Strands Agents](https://img.shields.io/badge/built%20with-Strands%20Agents-6b46c1.svg)](https://strandsagents.com)
 [![Deployed on Bedrock AgentCore](https://img.shields.io/badge/deployed%20on-Bedrock%20AgentCore-01a88d.svg)](https://aws.amazon.com/bedrock/agentcore/)
-[![tests](https://img.shields.io/badge/tests-626%20passing-2f8132.svg)](#tests)
+[![tests](https://img.shields.io/badge/tests-708%20passing-2f8132.svg)](#tests)
+
+### [**Try the live demo →**](https://d3epee0qvo95vm.cloudfront.net)
+
+Running now on Amazon Bedrock AgentCore Runtime + Memory in `us-east-1`, against real Claude
+Sonnet 4.6 and Haiku 4.5. Send a message on the **Inbox** tab and watch the Trace: the whole
+loop — intake, matching, outreach, the volunteer's reply, the confirmation — is real. The only
+thing role-played is the volunteers themselves, so nobody's actual phone buzzes for a demo.
 
 <img src="docs/screenshots/01-porch-decisions.png" alt="The Porch: three Decision Cards on the left, the Quiet Log on the right" width="900">
 
@@ -65,12 +72,13 @@ outreach happens, and again at every tool call as defence in depth.
 | Situation | What Porchlight does | Where |
 |---|---|---|
 | Danger language — child alone, chest pain, threats, self-harm, abuse | **Deny** outreach, red card, tell the requester to call emergency services | `DANGER_PATTERNS`, `safety_card` |
+| Intake flags something no rule matched | Still a card, still nobody contacted — but it ranks below the rules that *did* match, so an unpaid bill gets the money card, not a 911 card | `PolicyFlag.source`, `card_for` |
 | Money: gift cards, bills, cash, anything over the group's petty-cash limit | **Confirm** — a card before any commitment | `MONEY_PATTERNS`, `extract_amount`, `money_card` |
 | A first-time requester asking for help *inside* their home | **Confirm** — a vetting card | `IN_HOME_PATTERNS`, `vetting_card` |
 | A volunteer reports a concern about a requester or a visit | **Confirm** — a concern card | `CONCERN_PATTERNS`, `concern_card` |
 | Nobody accepted after `max_candidates` asks, or the window is closing | Card with options: widen the pool, reschedule, I'll take it, decline | `unmatched_card`, `run_sweep` |
 | Matcher confidence below `confidence_threshold` | A card instead of a guess | `PolicyGateHook` |
-| A message would go out during quiet hours (21:00–08:00 local) | **Guide** — schedule it for the morning instead | `is_quiet_hours`, `next_send_time` |
+| A message would go out during quiet hours (21:00–08:00 local by default; the hosted demo sets an empty window, because its volunteers are simulated and a visitor at midnight should still see the whole loop) | **Guide** — schedule it for the morning instead | `is_quiet_hours`, `next_send_time` |
 | A thank-you note, or a repeat of a request already in hand | Skip matching and outreach; the steward replies once and closes it | `find_similar_open_requests`, `AidRequest.needs_outreach` |
 | An outbound message carries the neighbour's phone or address to a volunteer who has not accepted | **Transform** — redact; share only after acceptance | `redact_pii` |
 | Everything else — a routine ride, groceries, a meal, with a good match | Fully autonomous, logged with a rationale | — |
@@ -93,6 +101,11 @@ the tool-level policy asking the same question again.
 ---
 
 ## See it
+
+▶ **[The live Porch](https://d3epee0qvo95vm.cloudfront.net)** — the screenshot below is that
+URL, right now, on AgentCore.
+
+<img src="docs/screenshots/live-porch.png" alt="The live Porch on AgentCore: one safety card open, two requests handled quietly" width="900">
 
 ▶ **Demo video — 4 min 14 s.** Hosted link: _added at submission._ Until then, build it
 yourself with `make video`: it records the real UI against the mock stack and writes
@@ -134,7 +147,7 @@ Judges score depth, so here is exactly where each feature lives.
 | Session managers — `FileSessionManager` locally, `S3SessionManager` on AWS | `make_session_manager` in [`graph.py`](porchlight/graph.py) |
 | `MemoryManager` over a custom `MemoryStore` — SQLite FTS5/BM25 locally, AgentCore Memory on AWS | [`porchlight/memory/`](porchlight/memory) |
 | **MCP** — the same data tools served over stdio and consumed with `MCPClient` when `PORCHLIGHT_TOOLS=mcp` | [`mcp_server.py`](porchlight/mcp_server.py), [`tools/mcp_bridge.py`](porchlight/tools/mcp_bridge.py) |
-| `strands_tools` — `current_time` on intake | [`agents/intake.py`](porchlight/agents/intake.py) |
+| `ContextInjector` plugin — current time and quiet-hours state injected every turn | `clock_injector` in [`agents/base.py`](porchlight/agents/base.py) |
 | Multimodal intake — image content blocks for photographed paper slips | `build_intake_task` in [`agents/intake.py`](porchlight/agents/intake.py) |
 | `StrandsTelemetry` OTLP → AgentCore Observability | [`porchlight/telemetry.py`](porchlight/telemetry.py) |
 | AgentCore Runtime — `BedrockAgentCoreApp` entrypoint with SSE streaming | [`porchlight/runtime.py`](porchlight/runtime.py) |
@@ -246,7 +259,7 @@ git clone <this repo> && cd porchlight
 python3.12 -m venv .venv && source .venv/bin/activate
 make install          # uv pip install -e ".[dev]"
 
-make test             # 626 tests, no network
+make test             # 708 tests, no network
 make demo-mock        # six neighbourhood requests through the real Strands graph
 ```
 
@@ -345,7 +358,7 @@ make test                                # everything
 pytest -q tests/i_test_integration.py    # the end-to-end graph tests
 ```
 
-**626 tests, all offline.** They cover the domain model and store, the six-component matcher, all 15
+**708 tests, all offline.** They cover the domain model and store, the six-component matcher, all 15
 tools (called directly *and* through a real `strands.Agent`), the channels, the memory stores, a
 real MCP round trip over stdio, every policy rule, the plain-English summariser behind every Quiet
 Log row, the agents, the graph's four scenarios (routine / safety / decline-decline-accept /

@@ -40,6 +40,7 @@ from porchlight.models import (
     Source,
     Urgency,
 )
+from porchlight.orchestrator import coerce_sweep_outcome
 from porchlight.sim.fixtures import seed_store
 from porchlight.store.sqlite_store import SqliteStore
 from porchlight.testing.mock_model import MockTurn, ScenarioModel
@@ -463,6 +464,10 @@ def test_sweep_escalates_a_request_running_out_of_time(gctx: AppContext) -> None
     assert outcome.decisions_created[0].kind is DecisionKind.UNMATCHED
     stored = gctx.store.get_request(request.id)
     assert stored is not None and stored.status is RequestStatus.ESCALATED
+    # The API's SweepOutcome carries ids, not counts: the sweep must fill both lists.
+    assert outcome.escalated == [request.id]
+    assert outcome.timed_out == [request.id]
+    assert coerce_sweep_outcome(outcome).escalated == [request.id]
 
 
 def test_sweep_leaves_a_healthy_request_alone(gctx: AppContext) -> None:
@@ -475,6 +480,7 @@ def test_sweep_leaves_a_healthy_request_alone(gctx: AppContext) -> None:
     outcome = run_sweep(gctx)
     assert outcome.requests_escalated == 0
     assert outcome.requests_checked == 1
+    assert outcome.escalated == [] and outcome.timed_out == []
 
 
 def test_brief_returns_markdown(gctx: AppContext, monkeypatch: pytest.MonkeyPatch) -> None:

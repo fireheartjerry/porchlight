@@ -8,7 +8,7 @@
     },
     "polly": {
       "voice": "Matthew",
-      "engine": "long-form",
+      "engine": "generative",
       "fallback_engine": "neural"
     }
   },

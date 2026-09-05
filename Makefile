@@ -170,6 +170,7 @@ destroy: ## Tear both halves down: the app stack, then the AgentCore runtime and
 # Demo video — see docs/VIDEO.md. Runs entirely against the local mock stack; no AWS.
 # ------------------------------------------------------------------------------------------
 
+MEDIA_TTS_ENGINE ?= say
 MEDIA_API_PORT ?= 8000
 MEDIA_WEB_PORT ?= 5173
 # Why the quiet hours are moved: after 21:00 the group's real policy holds outreach until
@@ -206,7 +207,7 @@ video: ## Record and cut the demo video into media/out/porchlight-demo.mp4
 	curl -sf $(MEDIA_BASE)/ >/dev/null || { echo "the UI never came up (media/out/web.log)" >&2; exit 1; }; \
 	curl -sf -X POST $(MEDIA_API)/demo/reset >/dev/null; \
 	echo; \
-	$(PY) media/tts.py; \
+	$(PY) media/tts.py --engine $(MEDIA_TTS_ENGINE); \
 	BASE=$(MEDIA_BASE) API=$(MEDIA_API) node media/record.mjs; \
 	node media/render-cards.mjs; \
 	node media/code-cards.mjs; \

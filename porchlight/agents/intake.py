@@ -8,7 +8,6 @@ import logging
 from typing import Any
 
 from strands import Agent
-from strands_tools import current_time
 
 from ..context import AppContext
 from ..models import AidRequest
@@ -27,12 +26,17 @@ __all__ = ["build_intake_task", "make_intake_agent"]
 
 
 def make_intake_agent(ctx: AppContext) -> Agent:
-    """Build the intake agent (fast tier, reads history, never contacts anybody)."""
+    """Build the intake agent (fast tier, reads history, never contacts anybody).
+
+    It has no clock tool: :func:`porchlight.agents.base.clock_injector` folds the group's local
+    time into every model call instead, which is both the current Strands idiom and one fewer
+    round trip on the message that decides whether an emergency reaches the coordinator.
+    """
     return build_agent(
         ctx,
         name="intake",
         system_prompt=intake_prompt(ctx.settings),
-        tools=[current_time, lookup_requester_history, find_similar_open_requests],
+        tools=[lookup_requester_history, find_similar_open_requests],
         output_model=IntakeResult,
         tier="haiku",
         description="Turns an inbound message into a structured aid request.",

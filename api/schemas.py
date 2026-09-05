@@ -32,6 +32,8 @@ class HealthResponse(BaseModel):
     version: str
     model_provider: str
     store: str
+    channel: str = "email"
+    """The resolved channel: ``sim`` when volunteers are role-played, ``email`` when messaged."""
     orchestrator: str
     graph_available: bool
 

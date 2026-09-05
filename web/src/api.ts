@@ -11,6 +11,7 @@ import type {
   Decision,
   DecisionResolution,
   DecisionStatus,
+  EventsPage,
   Health,
   InboxSubmission,
   LogEvent,
@@ -110,6 +111,11 @@ export const resolveDecision = (id: string, resolution: DecisionResolution) =>
 
 export const runSweep = () => request<SweepOutcome>('/sweep', { method: 'POST' })
 
+/**
+ * Server-driven "Run a Tuesday", kept for the local dev server and `scripts/run_day.py`.
+ * The UI drives the run itself (see `useDayRun`): a FastAPI background task does not
+ * survive on Lambda, where the invocation ends the moment the HTTP response is written.
+ */
 export const runDay = (count = 12) =>
   request<{ started: boolean; count: number }>('/demo/run_day', { method: 'POST', json: { count } })
 
@@ -118,6 +124,14 @@ export const resetDemo = () => request<{ ok: boolean }>('/demo/reset', { method:
 /* -------------------------------------------------------------------- SSE */
 
 export const eventsUrl = (): string => `${API_BASE}/events`
+
+/**
+ * The polling twin of the SSE stream, used when `EventSource` cannot stay open —
+ * a buffering proxy, a corporate middlebox, a browser that dropped the connection.
+ * Pass the `cursor` from the previous page back as `since`.
+ */
+export const pollEvents = (since = 0, limit = 200) =>
+  request<EventsPage>('/events/poll', { query: { since, limit } })
 
 /* ------------------------------------------------------------ query keys */
 

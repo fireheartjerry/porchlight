@@ -91,7 +91,7 @@ def get_ctx(tool_context: ToolContext) -> AppContext:
 
 
 def _build_channel(settings: Settings, store: Store, clock: Clock) -> Any:
-    """Build the configured channel: ``SimChannel`` in demo mode, ``EmailChannel`` live.
+    """Build the channel ``settings.channel`` asks for (``sim`` or ``email``).
 
     Both are constructed through :func:`porchlight.channels.make_channel` so the live channel
     gets the store it needs to resolve volunteer addresses. A failure to import the messaging
@@ -103,6 +103,31 @@ def _build_channel(settings: Settings, store: Store, clock: Clock) -> Any:
         logger.warning("channels package unavailable; using NullChannel")
         return NullChannel()
     return make_channel(settings, store, clock)
+
+
+def attach_simulator(ctx: AppContext) -> Any | None:
+    """Give a simulated channel the volunteer-simulator agent, if it wants one.
+
+    The channel only falls back to the scripted lines in :mod:`porchlight.sim.fixtures` when
+    no simulator is attached, so this is what makes the hosted demo answer in the configured
+    model's voice (Haiku, via :func:`porchlight.models_provider.make_model`) instead of
+    replaying a script. Importing the simulator pulls in Strands, so it is done here and not
+    at module import; anything going wrong leaves the scripted replies in place.
+
+    Args:
+        ctx: The context whose ``channel`` should answer as the volunteer.
+
+    Returns:
+        The attached reply function, or ``None`` when the channel does not simulate.
+    """
+    if not callable(getattr(ctx.channel, "set_reply_fn", None)):
+        return None
+    try:
+        from .sim.volunteer_sim import attach_volunteer_sim
+    except Exception:  # pragma: no cover - defensive; Strands is always present here
+        logger.warning("volunteer simulator unavailable; using scripted replies", exc_info=True)
+        return None
+    return attach_volunteer_sim(ctx)
 
 
 def _build_memory(settings: Settings) -> Any | None:
@@ -149,8 +174,12 @@ def build_context(settings: Settings | None = None, **overrides: Any) -> AppCont
 
     Demo mode wires ``SqliteStore`` + :class:`~porchlight.channels.sim.SimChannel` +
     :class:`~porchlight.memory.sqlite_store.SqliteMemoryStore`; live mode wires the configured
-    store, :class:`~porchlight.channels.email.EmailChannel`, and AgentCore Memory. The channel
-    and memory packages are imported lazily so importing this module never pulls in boto3.
+    store, the channel ``PORCHLIGHT_CHANNEL`` asks for, and AgentCore Memory. The channel and
+    memory packages are imported lazily so importing this module never pulls in boto3.
+
+    A channel this function built itself gets the volunteer simulator attached when it can use
+    one (:func:`attach_simulator`); a channel passed in through ``overrides`` is left exactly
+    as the caller built it, which is what tests rely on to get deterministic scripted replies.
 
     Args:
         settings: Settings to use; defaults to :func:`porchlight.config.get_settings`.
@@ -165,7 +194,8 @@ def build_context(settings: Settings | None = None, **overrides: Any) -> AppCont
     clock: Clock = overrides.pop("clock", None) or SystemClock()
     store: Store = overrides.pop("store", None) or make_store(settings)
     channel = overrides.pop("channel", None)
-    if channel is None:
+    built_channel = channel is None
+    if built_channel:
         channel = _build_channel(settings, store, clock)
     memory = overrides.pop("memory", "__unset__")
     if memory == "__unset__":
@@ -176,4 +206,7 @@ def build_context(settings: Settings | None = None, **overrides: Any) -> AppCont
         raise TypeError(f"unexpected overrides: {sorted(overrides)}")
     if persist:
         emit = persisting_emit(store, emit)
-    return AppContext(settings=settings, store=store, channel=channel, memory=memory, clock=clock, emit=emit)
+    ctx = AppContext(settings=settings, store=store, channel=channel, memory=memory, clock=clock, emit=emit)
+    if built_channel:
+        attach_simulator(ctx)
+    return ctx

@@ -143,7 +143,7 @@ def run(args: argparse.Namespace, stream: Any = sys.stdout) -> int:
     ctx = build_context(settings, emit=narrator)
 
     if args.reset or not ctx.store.list_volunteers():
-        counts = seed_store(ctx.store, ctx.clock)
+        counts = seed_store(ctx.store, ctx.clock, ctx.settings)
         stream.write(
             f"Seeded {counts['volunteers']} volunteers and {counts['requesters']} neighbours "
             f"into {settings.sqlite_path}.\n"

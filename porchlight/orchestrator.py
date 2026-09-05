@@ -38,9 +38,29 @@ MIN_RUNTIME_SESSION_ID = 33
 
 MAX_RUNTIME_SESSION_ID = 256
 
+RUNTIME_READ_TIMEOUT = 900
+"""Seconds to wait for the runtime's response.
+
+One ``process_request`` is a whole Strands graph — four agents, a dozen model calls — so it
+routinely outruns botocore's 60-second default. The runtime session itself is allowed 900
+seconds (``idleRuntimeSessionTimeout`` in ``agentcore/agentcore.json``), so this matches.
+"""
+
+RUNTIME_CONNECT_TIMEOUT = 10
+"""Seconds to wait for the connection itself; a slow *connect* really is a failure."""
+
 
 class GraphUnavailableError(RuntimeError):
     """Raised when ``porchlight.graph`` is not importable yet (parallel build, bad deploy)."""
+
+
+class RuntimeInvocationError(RuntimeError):
+    """Raised when the AgentCore Runtime answered, but said the invocation failed.
+
+    The runtime never raises out of :func:`porchlight.runtime.dispatch`; a bad payload or a
+    graph explosion comes back as ``{"ok": false, "error": ...}``. Turning that into an
+    exception here is what stops the API answering ``200`` with an empty ``RunOutcome``.
+    """
 
 
 # --------------------------------------------------------------------------------------
@@ -314,6 +334,42 @@ def parse_invoke_response(response: dict[str, Any]) -> Any:
         return text
 
 
+ENVELOPE_MARKER = "action"
+"""Every :func:`porchlight.runtime.dispatch` result carries the action it ran."""
+
+
+def unwrap_runtime_result(payload: Any, key: str) -> Any:
+    """Unwrap the envelope :func:`porchlight.runtime.dispatch` returns.
+
+    The runtime answers ``{"action": ..., "session_id": ..., "ok": true, "<key>": <result>}``
+    rather than the bare result, so that a caller can tell a refusal from an outcome. Handing
+    that envelope to :func:`coerce_run_outcome` silently produced an empty ``RunOutcome``
+    — ``status="new"``, ``log_events=0``, no summary — because none of the envelope's keys are
+    ``RunOutcome`` fields. That is the bug this function exists to prevent.
+
+    Args:
+        payload: Whatever :func:`parse_invoke_response` decoded.
+        key: The envelope key holding the result (``outcome``, or ``markdown`` for a brief).
+
+    Returns:
+        The unwrapped result, or ``payload`` unchanged when it is not an envelope — a bare
+        outcome from an older runtime, or a test stub, still works.
+
+    Raises:
+        RuntimeInvocationError: When the envelope reports ``ok: false``.
+    """
+    if not isinstance(payload, dict) or ENVELOPE_MARKER not in payload:
+        return payload
+    if payload.get("ok") is False:
+        action = payload.get(ENVELOPE_MARKER)
+        reason = payload.get("error") or "no reason given"
+        raise RuntimeInvocationError(f"runtime refused {action!r}: {reason}")
+    if "ok" not in payload and key not in payload:
+        return payload
+    result = payload.get(key)
+    return payload if result is None else result
+
+
 class AgentCoreOrchestrator:
     """Calls a deployed AgentCore Runtime instead of running the graph locally."""
 
@@ -345,8 +401,20 @@ class AgentCoreOrchestrator:
         """The boto3 ``bedrock-agentcore`` client, created on first use (never at import)."""
         if self._client is None:
             import boto3
+            from botocore.config import Config
 
-            self._client = boto3.client("bedrock-agentcore", region_name=self.region)
+            self._client = boto3.client(
+                "bedrock-agentcore",
+                region_name=self.region,
+                # A graph run takes minutes, and botocore's default is a 60-second read with
+                # retries on top. A retry here would not be a retry: the runtime would run the
+                # whole graph a second time, messaging the same volunteers again. One attempt.
+                config=Config(
+                    read_timeout=RUNTIME_READ_TIMEOUT,
+                    connect_timeout=RUNTIME_CONNECT_TIMEOUT,
+                    retries={"total_max_attempts": 1},
+                ),
+            )
         return self._client
 
     def _invoke(self, payload: dict[str, Any], session_key: str) -> Any:
@@ -375,7 +443,8 @@ class AgentCoreOrchestrator:
     def process_request(self, request_id: str) -> RunOutcome:
         """Ask the runtime to process ``request_id``."""
         payload = {"action": "process_request", "request_id": request_id}
-        return coerce_run_outcome(self._invoke(payload, request_id), request_id)
+        result = unwrap_runtime_result(self._invoke(payload, request_id), "outcome")
+        return coerce_run_outcome(result, request_id)
 
     def resume_decision(self, decision_id: str, option_id: str, note: str | None = None) -> RunOutcome:
         """Ask the runtime to resume the graph paused on ``decision_id``.
@@ -391,16 +460,19 @@ class AgentCoreOrchestrator:
             "option_id": option_id,
             "note": note,
         }
-        return coerce_run_outcome(self._invoke(payload, session_key), session_key)
+        result = unwrap_runtime_result(self._invoke(payload, session_key), "outcome")
+        return coerce_run_outcome(result, session_key)
 
     def sweep(self) -> SweepOutcome:
         """Ask the runtime to run a sweep."""
         day = self.ctx.now().date().isoformat()
-        return coerce_sweep_outcome(self._invoke({"action": "sweep"}, f"sweep-{day}"))
+        result = unwrap_runtime_result(self._invoke({"action": "sweep"}, f"sweep-{day}"), "outcome")
+        return coerce_sweep_outcome(result)
 
     def brief(self, day: date) -> str:
         """Ask the runtime for the daily brief."""
-        result = self._invoke({"action": "brief", "day": day.isoformat()}, f"brief-{day.isoformat()}")
+        raw = self._invoke({"action": "brief", "day": day.isoformat()}, f"brief-{day.isoformat()}")
+        result = unwrap_runtime_result(raw, "markdown")
         if isinstance(result, dict):
             for key in ("markdown", "brief", "summary", "text"):
                 if isinstance(result.get(key), str):
@@ -439,6 +511,7 @@ __all__ = [
     "LocalOrchestrator",
     "Orchestrator",
     "RunOutcome",
+    "RuntimeInvocationError",
     "SweepOutcome",
     "coerce_run_outcome",
     "coerce_sweep_outcome",
@@ -447,4 +520,5 @@ __all__ = [
     "make_orchestrator",
     "parse_invoke_response",
     "runtime_session_id",
+    "unwrap_runtime_result",
 ]

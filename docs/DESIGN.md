@@ -36,7 +36,7 @@ Porchlight's autonomy boundary is explicit, testable code, not vibes. The policy
 
 | Situation | Action |
 |---|---|
-| Medical emergency / danger language (child alone, threats, self-harm, abuse) | `Deny` autonomous outreach, tell requester to call emergency services in the reply draft, raise **Decision Card (red)** immediately |
+| Medical emergency / danger language (child alone, threats, self-harm, abuse) | `Deny` autonomous outreach, contact nobody at all, raise **Decision Card (red)** immediately; the "call emergency services" reply goes out only once the coordinator answers the card |
 | Any request involving money, gift cards, bills, cash, purchases above group's petty-cash limit | **Decision Card** before any commitment |
 | Requester is new *and* asks for in-home help | **Decision Card** (vetting) |
 | Volunteer reply contains a concern/complaint about a requester or safety | **Decision Card** |
@@ -76,7 +76,7 @@ All agents are Strands `Agent`s with Pydantic `structured_output_model`s. Orches
 
 | Agent | Model | Job | Tools |
 |---|---|---|---|
-| `intake` | Claude Haiku 4.5 (fast, cheap) | Parse any inbound channel into `AidRequest`; detect urgency, category, constraints, safety & money flags; read photos of paper forms | `current_time`, `image_reader`, `lookup_requester_history` |
+| `intake` | Claude Haiku 4.5 (fast, cheap) | Parse any inbound channel into `AidRequest`; detect urgency, category, constraints, safety & money flags; read photos of paper forms | `image_reader`, `lookup_requester_history` (the clock arrives as a `ContextInjector` plugin, not a tool) |
 | `matcher` | Claude Sonnet 4.6 | Produce `MatchPlan`: top-3 volunteers with rationale + confidence, honoring fairness (spread load), zone, skills, availability, memory notes | `find_candidates`, `volunteer_load`, `recall_memory` |
 | `outreach` | Claude Sonnet 4.6 | Write personal messages; interpret replies (`VolunteerReply`: accept / decline / counter / concern); advance to next candidate | `send_message`, `read_replies`, `assign_volunteer`, `schedule_message` |
 | `steward` | Claude Haiku 4.5 | Confirm with requester, set reminders, post-event check-in, distill outcome into memory notes, update volunteer stats | `send_message`, `schedule_message`, `remember`, `close_request` |
@@ -96,7 +96,7 @@ Sub-agent pattern: `outreach` uses `interpret_reply` as an **agent-as-tool** (a 
 - `SlidingWindowConversationManager` on long-lived agents
 - Session managers: `FileSessionManager` (local) / `S3SessionManager` (AWS) / `AgentCoreMemorySessionManager` (AgentCore Memory)
 - **MemoryManager** with a custom `MemoryStore` (SQLite locally, AgentCore Memory on AWS) for long-term volunteer/requester facts
-- `strands_tools`: `current_time`, `image_reader`
+- `strands_tools`: `image_reader` (the deprecated `current_time` tool was replaced by a `ContextInjector` plugin on every agent)
 - **MCP**: Porchlight's data tools are also exposed as an MCP server (`porchlight/mcp_server.py`) and consumed with `MCPClient` when `PORCHLIGHT_TOOLS=mcp` (locally via stdio, on AWS via AgentCore Gateway URL)
 - `StrandsTelemetry` OTLP → AgentCore Observability (CloudWatch)
 - Multimodal intake (image content blocks) for photographed paper request slips

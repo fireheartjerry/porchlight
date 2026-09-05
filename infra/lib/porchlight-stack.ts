@@ -238,8 +238,11 @@ export class PorchlightStack extends Stack {
     this.distribution.addBehavior(
       '/api/*',
       new origins.FunctionUrlOrigin(this.apiUrl, {
-        // SSE (`/api/events`) and a slow first graph run both need the longest read CloudFront allows.
-        readTimeout: Duration.seconds(60),
+        // SSE (`/api/events`) and a slow first graph run both need the longest read CloudFront
+        // allows. 120s is the account default for the "Response timeout per origin" quota
+        // (L-AECE9FA7) and its ceiling; a real request through the whole graph on Bedrock has
+        // been measured at 40-55s, so this is roughly a 2x margin, not comfort.
+        readTimeout: Duration.seconds(120),
         keepaliveTimeout: Duration.seconds(60),
       }),
       {
@@ -345,6 +348,15 @@ export class PorchlightStack extends Stack {
     const environment: Record<string, string> = {
       PORCHLIGHT_MODE: 'live',
       PORCHLIGHT_STORE: 'dynamo',
+      // The hosted demo role-plays volunteers instead of emailing them, so a visitor sees a
+      // whole loop — ask, reply, confirm — end to end. It has to match the runtime's
+      // PORCHLIGHT_CHANNEL in agentcore/agentcore.json: the sweep runs on this side.
+      PORCHLIGHT_CHANNEL: 'sim',
+      // Nobody is asleep on the other end of the simulator, and a visitor arriving at 11pm in
+      // the group's timezone should still see a whole loop rather than a message held until
+      // morning. Quiet hours stay on by default and in the local demo; an empty window (start
+      // equal to end) turns them off. Must match agentcore/agentcore.json.
+      PORCHLIGHT_QUIET_HOURS: '[0,0]',
       PORCHLIGHT_DYNAMO_TABLE: this.table.tableName,
       PORCHLIGHT_SESSION_BUCKET: this.sessionBucket.bucketName,
       PORCHLIGHT_EVENTS_SOURCE: 'store',

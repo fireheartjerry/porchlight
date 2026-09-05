@@ -11,6 +11,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 Mode = Literal["demo", "live"]
 ModelProvider = Literal["bedrock", "mock"]
 StoreKind = Literal["sqlite", "dynamo"]
+ChannelKind = Literal["auto", "sim", "email"]
 ToolsKind = Literal["local", "mcp"]
 EventsSource = Literal["memory", "store"]
 
@@ -31,6 +32,14 @@ class Settings(BaseSettings):
     model_provider: ModelProvider = "bedrock"
     store: StoreKind = "sqlite"
     tools: ToolsKind = "local"
+    channel: ChannelKind = "auto"
+    """How Porchlight talks to volunteers: ``sim``, ``email``, or ``auto``.
+
+    ``auto`` follows the mode — the simulator in demo mode, email in live mode. Set it to
+    ``sim`` on a live deployment to show the whole loop (outreach, reply, confirmation)
+    without texting a real person: the replies come from the Haiku-powered volunteer
+    simulator and are persisted through the store rather than held in one process.
+    """
     events_source: EventsSource = "memory"
     """Where ``/api/events`` reads from: this process's bus, or the store's persisted trace.
 
@@ -80,6 +89,16 @@ class Settings(BaseSettings):
     def is_demo(self) -> bool:
         """True when running the local demo wiring (sqlite + simulated channel)."""
         return self.mode == "demo"
+
+    @property
+    def channel_kind(self) -> Literal["sim", "email"]:
+        """The channel to build, with ``auto`` resolved against the mode."""
+        return ("sim" if self.is_demo else "email") if self.channel == "auto" else self.channel
+
+    @property
+    def simulates_replies(self) -> bool:
+        """True when volunteers are role-played rather than messaged for real."""
+        return self.channel_kind == "sim"
 
 
 @lru_cache(maxsize=1)

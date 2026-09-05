@@ -252,6 +252,62 @@ agentcore traces list --runtime Porchlight --since 1h
 aws logs tail /aws/lambda/<api function name> --follow
 ```
 
+### Traces: CloudWatch GenAI Observability
+
+`instrumentation.enableOtel` in `agentcore/agentcore.json` makes the CLI start the entrypoint as
+`opentelemetry-instrument main.py`, and the runtime's `envVars` carry `AGENT_OBSERVABILITY_ENABLED`,
+`OTEL_PYTHON_DISTRO=aws_distro` and `OTEL_PYTHON_CONFIGURATOR=aws_configurator`. That means the AWS
+Distro for OpenTelemetry owns the export pipeline before Porchlight imports anything, so
+`porchlight/telemetry.py` **adds no exporter of its own**: it attaches `StrandsTelemetry` to the
+provider the distro installed (`strands.telemetry.Tracer` reads the global provider, so every agent,
+graph-node, and tool span joins the same trace) and otherwise keeps its hands off. Two exporters on
+one provider would post every span twice, and the second one — built from `OTEL_EXPORTER_OTLP_*`
+by hand rather than by the distro — is the classic source of `Failed to export span batch code:
+400`. The guard in `adot_instrumented()` is three-way: the AgentCore switch, an ADOT or
+auto-instrumentation variable (or its `sitecustomize` directory on `PYTHONPATH`), or a provider
+that already carries span processors. If none of those holds — a self-hosted collector — Porchlight
+configures the exporter itself.
+
+Where to look, after an invocation:
+
+1. **CloudWatch → GenAI Observability → Bedrock AgentCore**, region `us-east-1`. Pick the
+   `Porchlight` runtime: sessions, traces, token counts and latency per invocation. A whole request
+   is one trace — `intake → matcher → outreach → steward` as nested spans, with the tool calls and
+   the model calls underneath.
+2. **CloudWatch → X-Ray traces** for the same spans without the GenAI framing
+   (`agentcore traces list --runtime Porchlight --since 1h` prints trace ids from the CLI).
+3. **Log group** `/aws/bedrock-agentcore/runtimes/<runtime-id>-DEFAULT` for the stdout side.
+   `agentcore logs --runtime Porchlight --query "span batch"` is the quick check that no duplicate
+   exporter came back.
+
+**Transaction Search must be on** before any of that has anything in it: enable it once per account
+under **CloudWatch → Application Signals → Transaction Search** (`aws xray
+get-trace-segment-destination` should say `CloudWatchLogs` / `ACTIVE`, and an `aws/spans` log group
+should exist). It takes a few minutes to come into effect, and spans exported during that window
+are rejected — which is exactly what the first live run hit: the account's indexing rule was
+modified at 00:22 UTC and the `400 Bad Request` batches are from 00:23. Re-check after a fresh
+invocation before treating a 400 as a code problem.
+
+If 400s survive an account with Transaction Search active, the next suspect is payload size rather
+than a duplicate exporter: Strands records prompts, tool arguments and tool results on the spans,
+and a 39k-token request makes a large batch. Two levers, both environment-only (set them in
+`agentcore.json`'s `envVars`, since the SDK reads them before Porchlight starts):
+`OTEL_ATTRIBUTE_VALUE_LENGTH_LIMIT=4096` truncates long attribute values, and
+`OTEL_SEMCONV_STABILITY_OPT_IN=gen_ai_unredacted_attributes=` makes Strands redact message content
+entirely — which also keeps neighbours' words out of CloudWatch, at the cost of a much less
+interesting trace.
+
+Verified on the deployed stack on 2026-09-05: zero `Failed to export` lines and zero `ERROR`-level
+records in the runtime log group over an hour of real invocations, and `aws xray get-trace-summaries`
+returning twelve traces whose durations line up with the runs that produced them (34.8s for a full
+graph run, 17.4s for a resumed decision, 6.5s for a sweep). One of those traces holds 556
+segments — `invoke_agent matcher` → `execute_event_loop_cycle` → `execute_tool recall_memory` →
+the DynamoDB and Bedrock calls underneath. The only stack traces in the log group are OTLP span
+*events*, not application errors: `S3.GetObject` `NoSuchKey` from `S3SessionManager` reading a
+session file that does not exist on the first turn, which the SDK handles.
+
+Locally, `PORCHLIGHT_TRACE_CONSOLE=1` prints the same spans to stdout without any AWS involvement.
+
 ---
 
 ## 4. When it does not work
@@ -264,10 +320,16 @@ aws logs tail /aws/lambda/<api function name> --follow
 | Messages marked `FAILED` in the Quiet Log | A sender *is* set but SES rejects it (unverified, or sandbox recipient) | `aws ses get-identity-verification-attributes --identities <addr>` |
 | `/api/events` arrives all at once | `AWS_LWA_INVOKE_MODE` or the Function URL's `InvokeMode` is not `response_stream` | Redeploy the stack; both are set in `infra/lib/porchlight-stack.ts` |
 | The porch shows no trace on AWS | `PORCHLIGHT_EVENTS_SOURCE` is not `store` on one of the halves | It must be `store` on both — the API and the agents are different processes |
+| `Failed to export span batch code: 400` in the runtime log | Transaction Search not active yet (most likely), or a second OTLP exporter alongside ADOT's | Confirm `aws xray get-trace-segment-destination` is `ACTIVE`, invoke again, then read *Traces* in § 3; `agentcore logs --runtime Porchlight --query telemetry` should say "reusing the tracer provider" |
+| No traces in CloudWatch GenAI Observability | Transaction Search not enabled, or `instrumentation.enableOtel` is false | See *Traces* in § 3 |
 | `ResourceNotFoundException` on the table | The two halves disagree about the table name | `pytest -q tests/v_test_deploy_config.py` |
 | `cdk deploy` says the environment is not bootstrapped | New account or region | `cd infra && npx cdk bootstrap aws://<account>/<region>` |
 | `build/lambda is missing` | The bundle was never built, or `make clean` removed it | `make build-lambda` |
 | The CodeZip is over 250 MB | A new dependency dragged in its full tree | Check `runtime/pyproject.toml`; `strands-agents-tools` is deliberately `--no-deps` |
+| `make deploy-runtime` fails with `No such command 'validate'` | The venv is active, and `bedrock-agentcore-starter-toolkit` puts its own `agentcore` on `PATH` ahead of the npm CLI | Run `make deploy-runtime` from a shell with the venv *deactivated*; `agentcore --help` should list `validate`. Everything else in the Makefile uses `.venv/bin/python` explicitly, so no other target cares |
+| `POST /api/inbox` returns 504 through CloudFront while the run finishes anyway | The origin response timeout is shorter than a real graph run | The behaviour's `readTimeout` is 120s, the account ceiling for quota `L-AECE9FA7`. Measured runs are 40–55s. Call the Function URL directly to rule CloudFront in or out |
+| `agentcore invoke '{"action":"sweep"}'` runs `process_request` instead | The CLI treats its positional argument as a chat prompt and wraps it as `{"prompt": "..."}` | Nothing to do — `unwrap_prompt` in `porchlight/runtime.py` unwraps a `prompt` that parses as a JSON object. If you see this, the deployed build predates that fix |
+| A red "Possible emergency" card about an unpaid bill | Intake put hardship into `safety_flags`; the prompt asks it to over-flag | Fixed twice over: the prompt now says hardship is not a safety flag, and an uncorroborated intake flag ranks below the rules that matched (`PolicyFlag.source`, `card_for`). See `tests/n_test_flag_provenance.py` |
 
 ---
 
@@ -305,11 +367,20 @@ Everything is on-demand and idles at approximately nothing:
 | AgentCore Memory | storage only | small |
 | EventBridge Scheduler | ~$0 | the hourly sweep costs nothing when nothing is due |
 
-**The real spend is Bedrock tokens.** A full 24-sample demo day is a few cents of Sonnet 4.6 and
-Haiku 4.5. The routing is deliberate: Haiku does intake, drafting and the sweep; Sonnet is reserved
-for judgement. Deploying with `PORCHLIGHT_MODEL_PROVIDER=mock` costs nothing at all and still
-exercises the whole graph, which is the cheapest way to check that the plumbing is right before
-spending a token.
+**The real spend is Bedrock tokens.** Measured on the live stack (us-east-1, September 2026), one
+*routine* request — intake, matcher, outreach, steward, with tool calls and the structured-output
+tool schemas in every turn — used **~39k tokens end to end, about $0.15**. A request that stops at a
+decision card costs less (intake plus the gate, no outreach loop); a resumed card costs roughly
+another half-request when the graph picks up again.
+
+So budget **~$0.15 per request, ~$4 for the full 24-sample demo day**, and a little more if you
+answer every card. Fine for a demo; a real group's Tuesday would want the levers, in the order
+worth pulling: Haiku already does intake, the reply reader and the steward, and Sonnet is kept for
+the two jobs with judgement in them (matching, and writing to a real person); the hourly sweep is
+model-free by design; and a group at volume would cache the shared values block, which is the same
+~700 tokens on the front of every call. `PORCHLIGHT_MODEL_PROVIDER=mock` costs nothing at all and
+still exercises the whole graph, which is the cheapest way to check that the plumbing is right
+before spending a token.
 
 The one thing that can surprise you is a runaway sweep against a large store, since every due
 request is a model call. `PORCHLIGHT_MAX_CANDIDATES` bounds outreach per request; the escalation
@@ -436,9 +507,10 @@ uv pip install --python-platform aarch64-manylinux2014 --python-version 3.12 \
 `--only-binary=:all:` turns a source-only dependency into a loud failure rather than a bundle that
 breaks at cold start. The requirements file is generated from `pyproject.toml`'s
 `[project].dependencies` (dev dependencies are never bundled). `strands-agents-tools` is installed
-with `--no-deps`: only `current_time` is used, and its full dependency tree (pillow, sympy, aiohttp,
-slack-bolt) would add ~70 MB of dead weight. The `porchlight` and `api` packages are copied in, and
-`run.sh` is generated.
+with `--no-deps`: no agent imports it any more (the clock moved from the deprecated `current_time`
+tool to a Strands `ContextInjector` — see *Traces* below and `porchlight/agents/base.py`), and its
+full dependency tree (pillow, sympy, aiohttp, slack-bolt) would add ~70 MB of dead weight. The
+`porchlight` and `api` packages are copied in, and `run.sh` is generated.
 
 The script prints the final size and refuses to finish over Lambda's 250 MB unzipped limit. Today:
 
@@ -559,6 +631,7 @@ else in the code has to know that name.
 ```
 PORCHLIGHT_MODE=live                PORCHLIGHT_MODEL_PROVIDER=bedrock
 PORCHLIGHT_STORE=dynamo             PORCHLIGHT_TOOLS=local
+PORCHLIGHT_CHANNEL=sim              PORCHLIGHT_QUIET_HOURS=[0,0]
 PORCHLIGHT_EVENTS_SOURCE=store      PORCHLIGHT_AWS_REGION=us-east-1
 PORCHLIGHT_DYNAMO_TABLE=porchlight
 PORCHLIGHT_SESSION_BUCKET=porchlight-sessions-892077329800-us-east-1
@@ -569,6 +642,17 @@ AGENT_OBSERVABILITY_ENABLED=true    OTEL_PYTHON_DISTRO=aws_distro
 OTEL_PYTHON_CONFIGURATOR=aws_configurator
 MEMORY_PORCHLIGHTMEMORY_ID=<injected>            AWS_REGION=<set by the service>
 ```
+
+`PORCHLIGHT_CHANNEL=sim` and `PORCHLIGHT_QUIET_HOURS=[0,0]` are the two settings that make this a
+*hosted demo* rather than a production deployment, and both must match the Lambda environment in
+`infra/lib/porchlight-stack.ts` — the graph messages volunteers on the runtime side, the hourly
+sweep delivers on the Lambda side, and a disagreement means one half holds a message the other
+half thinks it already sent. `sim` role-plays the volunteers with Haiku instead of emailing real
+people; the empty quiet-hours window (start equal to end) turns quiet hours off, because nobody is
+asleep on the other end of a simulator and a visitor arriving at 23:00 in the group's timezone
+should still see the loop close instead of a message held until 08:00. `tests/v_test_deploy_config.py`
+asserts both pairs. For a real group, drop both lines: the defaults are `auto` (which resolves to
+email in live mode) and 21:00–08:00.
 
 `AWS_REGION` is deliberately *not* listed: the service provides it, and `PORCHLIGHT_AWS_REGION`
 takes precedence in `config.py` anyway. `PORCHLIGHT_FROM_ADDR` is also absent — see

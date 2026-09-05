@@ -276,7 +276,7 @@ def check_graph(args: argparse.Namespace, stream: Any) -> bool:
     )
     meter = UsageMeter()
     ctx = build_context(settings, emit=meter)
-    counts = seed_store(ctx.store, ctx.clock)
+    counts = seed_store(ctx.store, ctx.clock, ctx.settings)
     ok(stream, f"seeded {counts['volunteers']} volunteers into {args.db}")
 
     samples = []

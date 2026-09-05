@@ -1,10 +1,12 @@
 import { createContext } from 'react'
-import type { ConnectionState, DemoProgress, TraceEvent } from '../types'
+import type { ConnectionState, DemoProgress, EventTransport, TraceEvent } from '../types'
 
 export interface EventsApi {
   /** Newest last. Capped at 500 (RING_SIZE). */
   events: TraceEvent[]
   status: ConnectionState
+  /** Which pipe the trace is arriving through: the SSE stream, or `/api/events/poll`. */
+  transport: EventTransport
   paused: boolean
   setPaused: (paused: boolean) => void
   clear: () => void
@@ -20,6 +22,7 @@ const noop = () => {}
 export const EventsContext = createContext<EventsApi>({
   events: [],
   status: 'connecting',
+  transport: 'sse',
   paused: false,
   setPaused: noop,
   clear: noop,

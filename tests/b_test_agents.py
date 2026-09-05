@@ -102,6 +102,14 @@ def test_values_mention_the_configured_quiet_hours(settings: Settings) -> None:
     assert f"{start}:00 to {end}:00" in prompt
 
 
+def test_values_say_so_when_a_group_has_no_quiet_hours(settings: Settings) -> None:
+    """A group with an empty window must not be told to schedule for a morning that never comes."""
+    open_all_hours = settings.model_copy(update={"quiet_hours": (0, 0)})
+    prompt = intake_prompt(open_all_hours)
+    assert "has not set quiet hours" in prompt
+    assert "0:00 to 0:00" not in prompt
+
+
 def test_prompts_are_routable_by_the_scenario_model(settings: Settings) -> None:
     assert "[[agent:intake]]" in intake_prompt(settings)
     assert "[[agent:matcher]]" in matcher_prompt(settings)

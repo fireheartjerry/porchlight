@@ -30,6 +30,8 @@
         { "name": "PORCHLIGHT_MODE", "value": "live" },
         { "name": "PORCHLIGHT_MODEL_PROVIDER", "value": "bedrock" },
         { "name": "PORCHLIGHT_STORE", "value": "dynamo" },
+        { "name": "PORCHLIGHT_CHANNEL", "value": "sim" },
+        { "name": "PORCHLIGHT_QUIET_HOURS", "value": "[0,0]" },
         { "name": "PORCHLIGHT_TOOLS", "value": "local" },
         { "name": "PORCHLIGHT_EVENTS_SOURCE", "value": "store" },
         { "name": "PORCHLIGHT_DYNAMO_TABLE", "value": "porchlight" },

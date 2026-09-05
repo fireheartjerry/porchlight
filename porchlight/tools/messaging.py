@@ -38,7 +38,7 @@ def _new_message(
         to=to,
         recipient_id=recipient_id,
         body=body,
-        channel="sim" if ctx.settings.is_demo else "email",
+        channel=ctx.settings.channel_kind,
         status=MessageStatus.DRAFT,
         created_at=ctx.clock.now(),
     )

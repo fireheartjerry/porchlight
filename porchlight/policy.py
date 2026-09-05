@@ -21,7 +21,7 @@ from __future__ import annotations
 import json
 import logging
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from functools import lru_cache
 from typing import Any, Literal
@@ -60,6 +60,8 @@ from .tools.summaries import AGENT_ROLES, call_phrase, describe_tool
 logger = logging.getLogger(__name__)
 
 Severity = Literal["info", "warn", "block"]
+FlagSource = Literal["rule", "intake"]
+"""``rule``: a deterministic pattern or an explicit field matched. ``intake``: the model said so."""
 """``block`` = never do it autonomously; ``warn`` = ask the coordinator; ``info`` = log only."""
 
 
@@ -76,6 +78,8 @@ class PolicyFlag(BaseModel):
     kind: DecisionKind
     reason: str
     severity: Severity = "warn"
+    source: FlagSource = "rule"
+    """Where the flag came from. ``intake`` means a model wrote it, and nothing corroborates it."""
 
     def blocks(self) -> bool:
         """True when this flag forbids autonomous outreach outright."""
@@ -267,6 +271,7 @@ def evaluate_request(req: AidRequest, settings: Settings) -> list[PolicyFlag]:
                 kind=DecisionKind.SAFETY,
                 reason="intake flagged: " + "; ".join(req.safety_flags),
                 severity="block",
+                source="intake",
             )
         )
     if req.urgency is Urgency.EMERGENCY:
@@ -587,18 +592,38 @@ def _summary(req: AidRequest | None) -> str:
 
 
 def safety_card(req: AidRequest | None, flags: list[PolicyFlag]) -> DecisionSpec:
-    """Red card: the message hints at danger, so no volunteer goes out on autopilot."""
+    """Red card: the message hints at danger, so no volunteer goes out on autopilot.
+
+    Two shapes, because two different things send a coordinator running. When a deterministic
+    rule matched — danger language, or intake calling it an emergency outright — this is the
+    "dial emergency services" card. When the only signal is a phrase intake chose to flag, the
+    card still blocks every volunteer, but it does not tell the coordinator to call 911 about
+    something a model was merely uneasy about.
+    """
     reasons = "\n".join(f"- {flag.reason}" for flag in flags) or "- danger language in the message"
+    corroborated = any(flag.source == "rule" for flag in flags)
+    if corroborated:
+        title = "Possible emergency — needs you now"
+        tail = (
+            "No volunteer has been messaged, and nothing has gone to the requester: the reply "
+            "pointing them at emergency services waits until you have decided."
+        )
+        recommendation = "Call the requester yourself, and tell them to dial emergency services now."
+    else:
+        title = "Porchlight would not act on this alone"
+        tail = (
+            "No volunteer has been messaged and nothing has gone to the requester. No rule "
+            "matched here — intake raised it — so read the message before anything happens."
+        )
+        recommendation = "Read the original message yourself, then decide whether this is ours to take."
     return DecisionSpec(
         kind=DecisionKind.SAFETY,
-        title="Possible emergency — needs you now",
+        title=title,
         context=(
             f"**{_summary(req)}**\n\n"
-            f"Porchlight stopped before contacting anyone because:\n{reasons}\n\n"
-            "No volunteer has been messaged. The draft reply to the requester points them at "
-            "emergency services."
+            f"Porchlight stopped before contacting anyone because:\n{reasons}\n\n{tail}"
         ),
-        recommendation="Call the requester yourself, and tell them to dial emergency services now.",
+        recommendation=recommendation,
         options=(
             ("i_will_handle", "I'll handle this", "You take it personally; Porchlight stands down."),
             ("approve", "Send a volunteer anyway", "Only if you have confirmed it is not an emergency."),
@@ -679,6 +704,33 @@ def unmatched_card(req: AidRequest | None, plan: MatchPlan | None, settings: Set
     )
 
 
+def review_card(req: AidRequest | None, reason: str = "") -> DecisionSpec:
+    """Intake asked for a person: nothing to dispatch, but nothing to close quietly either.
+
+    The deterministic rules found no danger, no money, and no vetting problem, yet intake set
+    ``needs_human`` — it could not read the message confidently enough to act. That is a card,
+    not a silent close: the group's values say "escalate rather than guess", and being unsure is
+    itself listed there as a reason to escalate.
+    """
+    detail = reason.strip() or "intake was not confident enough to act on this on its own"
+    return DecisionSpec(
+        kind=DecisionKind.POLICY,
+        title="Porchlight is not sure about this one",
+        context=(
+            f"**{_summary(req)}**\n\n- {detail}\n\n"
+            "Nobody has been messaged. It is here rather than closed because reading it wrong "
+            "either way would cost somebody something."
+        ),
+        recommendation="Read the message, then either let Porchlight carry on or take it yourself.",
+        options=(
+            ("approve", "Carry on", "Porchlight arranges it the ordinary way."),
+            ("i_will_handle", "I'll handle this", "You take it; Porchlight stands down."),
+            ("decline_request", "Nothing to do", "Close it with a kind reply."),
+        ),
+        request_id=req.id if req else None,
+    )
+
+
 def concern_card(req: AidRequest | None, note: str) -> DecisionSpec:
     """A volunteer reported something off — always a person's call."""
     return DecisionSpec(
@@ -696,16 +748,37 @@ def concern_card(req: AidRequest | None, note: str) -> DecisionSpec:
 
 
 def card_for(req: AidRequest | None, flags: list[PolicyFlag], settings: Settings) -> DecisionSpec | None:
-    """Pick the card that matches the most severe flag, or ``None`` when nothing applies."""
-    for kind, builder in (
-        (DecisionKind.SAFETY, lambda f: safety_card(req, f)),
-        (DecisionKind.MONEY, lambda f: money_card(req, f, settings)),
-        (DecisionKind.VETTING, lambda f: vetting_card(req, f)),
-        (DecisionKind.CONCERN, lambda f: concern_card(req, f[0].reason)),
-    ):
-        matching = [flag for flag in flags if flag.kind is kind and flag.needs_card()]
-        if matching:
-            return builder(matching)
+    """Pick the card that matches the most severe flag, or ``None`` when nothing applies.
+
+    Safety normally wins outright. The exception is a safety flag whose only source is intake's
+    own ``safety_flags`` list: a model asked to over-flag rather than under-flag will call an
+    unpaid electric bill a safety issue, and a red "dial emergency services" card about a
+    utility bill is both wrong and the kind of noise this whole project exists to remove. When
+    nothing corroborates it, an uncorroborated safety flag drops below the rules that did match
+    — money, vetting, a volunteer's concern — and rides along inside whichever card wins, so the
+    coordinator still sees what intake was worried about.
+    """
+    cards = {
+        DecisionKind.SAFETY: lambda f: safety_card(req, f),
+        DecisionKind.MONEY: lambda f: money_card(req, f, settings),
+        DecisionKind.VETTING: lambda f: vetting_card(req, f),
+        DecisionKind.CONCERN: lambda f: concern_card(req, f[0].reason),
+    }
+    by_kind = {kind: [flag for flag in flags if flag.kind is kind and flag.needs_card()] for kind in cards}
+    safety = by_kind[DecisionKind.SAFETY]
+    corroborated = any(flag.source == "rule" for flag in safety)
+    order = list(cards)
+    if safety and not corroborated:
+        order = [kind for kind in order if kind is not DecisionKind.SAFETY] + [DecisionKind.SAFETY]
+
+    for kind in order:
+        matching = by_kind[kind]
+        if not matching:
+            continue
+        spec = cards[kind](matching)
+        if kind is not DecisionKind.SAFETY and safety:
+            spec = replace(spec, context=f"{spec.context}\n\nIntake also flagged: {safety[0].reason}.")
+        return spec
     return None
 
 

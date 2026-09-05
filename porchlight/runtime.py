@@ -22,6 +22,7 @@ Locally: ``python -m porchlight.runtime`` (port 8080), or ``python runtime/main.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 from collections.abc import AsyncIterator
@@ -56,6 +57,7 @@ __all__ = [
     "request_id_from_session",
     "runtime_settings",
     "session_id_of",
+    "unwrap_prompt",
 ]
 
 
@@ -117,6 +119,32 @@ def _parse_day(value: Any) -> date | None:
         return None
 
 
+def unwrap_prompt(payload: dict[str, Any]) -> dict[str, Any]:
+    """Return the real payload, unwrapping the ``prompt`` envelope the AgentCore CLI adds.
+
+    ``agentcore invoke '{"action": "sweep"}'`` sends ``{"prompt": "{\"action\": \"sweep\"}"}``
+    — the CLI treats its positional argument as a chat prompt, so a payload typed at the command
+    line arrives as a JSON string nested inside one field. Everything else (the API's own boto3
+    call, the sweep Lambda, a local ``curl``) posts the payload directly and is untouched here.
+
+    Args:
+        payload: The decoded body of ``POST /invocations``.
+
+    Returns:
+        The inner object when ``prompt`` carries one, otherwise ``payload`` unchanged.
+    """
+    prompt = payload.get("prompt")
+    if not isinstance(prompt, str) or not prompt.strip().startswith("{"):
+        return payload
+    try:
+        inner = json.loads(prompt)
+    except json.JSONDecodeError:
+        return payload
+    if not isinstance(inner, dict):
+        return payload
+    return {**{k: v for k, v in payload.items() if k != "prompt"}, **inner}
+
+
 def dispatch(ctx: AppContext, payload: dict[str, Any], session_id: str | None = None) -> dict[str, Any]:
     """Run one payload against the graph and return a JSON-safe result.
 
@@ -131,6 +159,7 @@ def dispatch(ctx: AppContext, payload: dict[str, Any], session_id: str | None = 
         arguments come back as ``ok=False`` with a message rather than raising, so the caller
         always gets JSON.
     """
+    payload = unwrap_prompt(payload)
     action = str(payload.get("action") or "process_request")
     result: dict[str, Any] = {"action": action, "session_id": session_id}
 

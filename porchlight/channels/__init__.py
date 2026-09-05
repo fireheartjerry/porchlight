@@ -32,13 +32,19 @@ def make_channel(
     *,
     reply_fn: ReplyFn | None = None,
 ) -> Channel:
-    """Return the channel configured by ``settings.mode``.
+    """Return the channel ``settings.channel`` asks for.
+
+    ``PORCHLIGHT_CHANNEL`` is ``auto`` by default, which means "simulate in demo mode, send
+    email in live mode". Setting it to ``sim`` explicitly is what lets a *live* deployment —
+    real models, DynamoDB, AgentCore — still show the whole loop without texting anyone:
+    :class:`~porchlight.channels.sim.SimChannel` mirrors every reply into the store, so the
+    API process sees the same conversation the graph did.
 
     Args:
-        settings: Application settings; ``demo`` mode simulates, ``live`` mode sends email.
+        settings: Application settings; ``settings.channel_kind`` picks the implementation.
         store: Store the channel persists messages to.
         clock: Time source.
-        reply_fn: Volunteer simulator for demo mode.
+        reply_fn: Volunteer simulator, used by the simulated channel.
 
     Returns:
         A :class:`~porchlight.channels.sim.SimChannel` or
@@ -49,7 +55,7 @@ def make_channel(
     worse than one that logs them. Set ``PORCHLIGHT_FROM_ADDR`` to a verified sender to send
     for real.
     """
-    if settings.is_demo:
+    if settings.channel_kind == "sim":
         return SimChannel(store, clock, reply_fn)
     unverified = settings.from_addr.strip().lower() == DEFAULT_FROM_ADDR
     if unverified:

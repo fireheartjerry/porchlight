@@ -7,10 +7,16 @@ Shape of the graph::
        │          └── decline ─┘            │   (bounded by settings.max_candidates)
        └──────── not a request, or a duplicate ─┘
 
+The short-circuit edge is for thank-yous, chatter, and duplicates only. Anything flagged —
+danger, an emergency, the group's money, or intake's ``needs_human`` — takes the matcher edge
+instead however ``is_request`` came back, and stops at the gate as a decision card
+(:func:`needs_coordinator`).
+
 Two decision points are **graph-level interrupts**, raised by :class:`PolicyGateHook` before a
 node runs, so the pause is persisted by the session manager and survives the process:
 
-* before ``matcher`` — safety, money, or vetting flags on the request;
+* before ``matcher`` — safety, money, or vetting flags on the request, or intake asking for a
+  person;
 * before ``outreach`` — no candidate, low confidence, or the ask limit reached.
 
 A third kind (a volunteer raising a concern) is raised inside a node by
@@ -57,6 +63,7 @@ from .models import (
     MatchPlan,
     MessageStatus,
     RequestStatus,
+    Urgency,
     jsonable,
 )
 from .policy import (
@@ -69,6 +76,7 @@ from .policy import (
     evaluate_request,
     extract_amount,
     option_id_of,
+    review_card,
     unmatched_card,
 )
 from .tools.summaries import display_name, first_name
@@ -93,11 +101,43 @@ __all__ = [
     "RunOutcome",
     "SweepOutcome",
     "build_graph",
+    "needs_coordinator",
     "resume_decision",
     "run_brief",
     "run_request",
     "run_sweep",
 ]
+
+
+# --------------------------------------------------------------------------------------
+# Safety before the short-circuit
+# --------------------------------------------------------------------------------------
+
+
+def needs_coordinator(request: AidRequest | None, parsed: IntakeResult | None = None) -> bool:
+    """True when a message must reach the coordinator whatever else intake made of it.
+
+    **Safety beats the short-circuit.** The "no job in this message" edge exists so a thank-you
+    note does not make a volunteer's phone buzz — it must never become a way for a flagged
+    message to be closed quietly. On the first live run, "the kid next door is home alone and I
+    can smell the stove" came back from Claude as ``is_request=false`` *with* two safety flags
+    *and* ``needs_human=true``, took that edge, and was cancelled with no card. Any one of
+    danger, an emergency, the group's money, or intake's own "a person should read this" now
+    routes to the decision-card path regardless of ``is_request``.
+
+    Args:
+        request: The stored request, already carrying whatever intake understood.
+        parsed: Intake's structured output for this run, when the graph has it. It is the only
+            place ``needs_human`` lives — the field is intake's judgement, not request state.
+
+    Returns:
+        True when the request must go to the gate that raises a decision card.
+    """
+    if parsed is not None and parsed.needs_coordinator():
+        return True
+    if request is None:
+        return False
+    return bool(request.safety_flags) or request.urgency is Urgency.EMERGENCY or request.money_involved
 
 
 # --------------------------------------------------------------------------------------
@@ -126,6 +166,12 @@ class SweepOutcome(BaseModel):
     messages_sent: int = 0
     requests_checked: int = 0
     requests_escalated: int = 0
+    escalated: list[str] = Field(default_factory=list)
+    """Ids of the requests this sweep handed to the coordinator."""
+
+    timed_out: list[str] = Field(default_factory=list)
+    """Ids of the requests escalated because the window ran out (a subset of ``escalated``)."""
+
     decisions_created: list[Decision] = Field(default_factory=list)
     summary: str = ""
 
@@ -201,6 +247,15 @@ def _no_outreach_summary(ctx: AppContext, request: AidRequest) -> str:
         what = original.summary if original and original.summary else "the same thing"
         return f"Already in hand — this chases “{what}”, so nobody was asked twice."
     return "Nothing to arrange — this message isn't asking for help."
+
+
+def _flagged_summary(request: AidRequest) -> str:
+    """Why a message with nothing to dispatch is still going to the coordinator."""
+    if request.safety_flags or request.urgency is Urgency.EMERGENCY:
+        return "No job to send anyone on — but this reads like an emergency, so it goes to you."
+    if request.money_involved:
+        return "No job to send anyone on — but it asks for money, so it goes to you."
+    return "Nothing to arrange here, and not something to close on my own — it goes to you."
 
 
 DECISION_LINES: dict[DecisionKind, str] = {
@@ -283,19 +338,37 @@ class PolicyGateHook(HookProvider):
             return None
         return self.ctx.store.get_request(request_id)
 
-    def _plan(self, event: BeforeNodeCallEvent) -> MatchPlan | None:
+    def _state(self, event: BeforeNodeCallEvent) -> GraphState | None:
         graph = getattr(event, "source", None)
-        state = getattr(graph, "state", None)
+        return getattr(graph, "state", None)
+
+    def _plan(self, event: BeforeNodeCallEvent) -> MatchPlan | None:
+        state = self._state(event)
         if state is None:  # pragma: no cover - defensive
             return None
         return node_output(state, "matcher", MatchPlan)
+
+    def _intake(self, event: BeforeNodeCallEvent) -> IntakeResult | None:
+        """Intake's structured output for this run; the only place ``needs_human`` survives."""
+        state = self._state(event)
+        if state is None:  # pragma: no cover - defensive
+            return None
+        return node_output(state, "intake", IntakeResult)
 
     def _spec_for(self, event: BeforeNodeCallEvent, request: AidRequest | None) -> Any:
         """Return the decision card this node should raise, or ``None`` to proceed."""
         settings = self.ctx.settings
         if event.node_id == "matcher":
             flags: list[PolicyFlag] = evaluate_request(request, settings) if request else []
-            return card_for(request, flags, settings)
+            spec = card_for(request, flags, settings)
+            if spec is not None:
+                return spec
+            # Nothing deterministic fired, but intake asked for a person. Escalate rather than
+            # guess — and never let a flagged message reach a volunteer or a quiet close.
+            parsed = self._intake(event)
+            if parsed is not None and parsed.needs_human:
+                return review_card(request, parsed.reasoning)
+            return None
         if event.node_id == "outreach":
             plan = self._plan(event)
             attempts = len(request.attempts) if request else 0
@@ -382,13 +455,15 @@ class RequestSyncHook(HookProvider):
             if draft.status in (RequestStatus.NEW, RequestStatus.TRIAGING) and draft.needs_outreach():
                 draft.status = RequestStatus.MATCHING
             if not draft.needs_outreach():
+                escalating = needs_coordinator(draft, parsed)
                 _log(
                     self.ctx,
                     draft.id,
                     LogKind.POLICY,
-                    _no_outreach_summary(self.ctx, draft),
+                    _flagged_summary(draft) if escalating else _no_outreach_summary(self.ctx, draft),
                     duplicate_of=draft.duplicate_of,
                     is_request=draft.is_request,
+                    needs_coordinator=escalating,
                 )
         elif event.node_id == "outreach":
             step = node_output(graph_state, "outreach", OutreachStep)
@@ -443,9 +518,18 @@ def build_graph(ctx: AppContext, session_id: str) -> Graph:
     request_id = session_id
 
     def should_match(state: GraphState) -> bool:
-        """Rank volunteers only when there is actually a job in the message."""
+        """Rank volunteers when there is a job in the message — or a reason to raise a card.
+
+        A flagged message goes this way too even though nobody will be asked: the matcher is
+        where :class:`PolicyGateHook` sits, so this edge *is* the road to the decision card.
+        The gate stops the request before the matcher ever runs.
+        """
         request = _request_of(ctx, request_id)
-        return request is None or request.needs_outreach()
+        if request is None:
+            return True
+        return request.needs_outreach() or needs_coordinator(
+            request, node_output(state, "intake", IntakeResult)
+        )
 
     def should_close_out(state: GraphState) -> bool:
         """Hand straight to the steward when nobody needs to be asked anything.
@@ -453,9 +537,14 @@ def build_graph(ctx: AppContext, session_id: str) -> Graph:
         A thank-you note, an update, or a second message chasing a job already in hand is still
         worth a courteous reply — but no volunteer's phone should buzz for it, so intake skips
         the matcher and outreach entirely and the steward closes it politely.
+
+        Never a flagged message: danger, an emergency, money, or intake's own ``needs_human``
+        take the other edge and land on the porch instead of being closed (``LIVE-FIXES`` A).
         """
         request = _request_of(ctx, request_id)
-        return request is not None and not request.needs_outreach()
+        if request is None or request.needs_outreach():
+            return False
+        return not needs_coordinator(request, node_output(state, "intake", IntakeResult))
 
     def should_outreach(state: GraphState) -> bool:
         """Move on to outreach unless the coordinator (or policy) halted the request."""
@@ -751,7 +840,8 @@ def run_sweep(ctx: AppContext) -> SweepOutcome:
             body=message.body,
         )
 
-    escalated = 0
+    escalated_ids: list[str] = []
+    timed_out_ids: list[str] = []
     cards: list[Decision] = []
     open_requests = [
         request
@@ -783,7 +873,9 @@ def run_sweep(ctx: AppContext) -> SweepOutcome:
         ctx.store.put_decision(decision)
         cards.append(decision)
         _save(ctx, request.id, status=RequestStatus.ESCALATED)
-        escalated += 1
+        escalated_ids.append(request.id)
+        if out_of_time:
+            timed_out_ids.append(request.id)
         _log(
             ctx,
             request.id,
@@ -796,9 +888,11 @@ def run_sweep(ctx: AppContext) -> SweepOutcome:
     return SweepOutcome(
         messages_sent=sent,
         requests_checked=len(open_requests),
-        requests_escalated=escalated,
+        requests_escalated=len(escalated_ids),
+        escalated=escalated_ids,
+        timed_out=timed_out_ids,
         decisions_created=cards,
-        summary=f"{sent} message(s) sent, {escalated} request(s) escalated",
+        summary=f"{sent} message(s) sent, {len(escalated_ids)} request(s) escalated",
     )
 
 

@@ -1,21 +1,25 @@
 /**
- * "Run a Tuesday": push a whole week-night of requests through the graph at once
- * and watch the split — how many Porchlight carried alone, how many it brought
- * to you. The bar is driven by `demo_progress` SSE events, not a timer.
+ * "Run a Tuesday": push a whole week-night of requests through the graph and watch
+ * the split — how many Porchlight carried alone, how many it brought to you.
+ *
+ * The browser drives the run one `POST /api/inbox` at a time (see `useDayRun`), so
+ * the bar below counts requests this tab actually finished rather than trusting a
+ * background task on the server to still be alive.
  */
 
 import clsx from 'clsx'
-import { Play, RotateCcw } from 'lucide-react'
+import { Play, RotateCcw, Square } from 'lucide-react'
 import { Button } from '../Button'
-import type { DemoProgress } from '../../types'
+import type { DayRunState } from '../../hooks/useDayRun'
 
 const COUNTS = [6, 12, 20]
 
 interface DayRunnerProps {
-  progress: DemoProgress | null
+  progress: DayRunState | null
   count: number
   onCountChange: (count: number) => void
   onRun: () => void
+  onStop: () => void
   running: boolean
   onReset: () => void
   resetting: boolean
@@ -27,13 +31,15 @@ export function DayRunner({
   count,
   onCountChange,
   onRun,
+  onStop,
   running,
   onReset,
   resetting,
   onGoToPorch,
 }: DayRunnerProps) {
   const pct = progress && progress.total > 0 ? Math.round((progress.done / progress.total) * 100) : 0
-  const finished = progress !== null && progress.done >= progress.total
+  const finished = progress !== null && !progress.running
+  const failed = progress?.failed ?? 0
 
   return (
     <section className="porch-card relative mb-5 overflow-hidden px-5 py-4">
@@ -76,20 +82,31 @@ export function DayRunner({
               </button>
             ))}
           </div>
-          <Button
-            variant="primary"
-            size="sm"
-            icon={<Play className="h-3.5 w-3.5" aria-hidden />}
-            loading={running}
-            onClick={onRun}
-          >
-            Run a Tuesday
-          </Button>
+          {running ? (
+            <Button
+              variant="quiet"
+              size="sm"
+              icon={<Square className="h-3.5 w-3.5" aria-hidden />}
+              onClick={onStop}
+            >
+              Stop after this one
+            </Button>
+          ) : (
+            <Button
+              variant="primary"
+              size="sm"
+              icon={<Play className="h-3.5 w-3.5" aria-hidden />}
+              onClick={onRun}
+            >
+              Run a Tuesday
+            </Button>
+          )}
           <Button
             variant="quiet"
             size="sm"
             icon={<RotateCcw className="h-3.5 w-3.5" aria-hidden />}
             loading={resetting}
+            disabled={running}
             onClick={onReset}
           >
             Reset demo
@@ -103,15 +120,22 @@ export function DayRunner({
             <p className="text-[0.85rem] text-cream">
               {finished ? (
                 <>
-                  Tuesday done —{' '}
+                  {progress.stopped ? 'Tuesday stopped' : 'Tuesday done'} —{' '}
                   <span className="tabnum text-sage">{progress.quiet}</span> handled quietly,{' '}
-                  <span className="tabnum text-lamp-glow">{progress.cards}</span> needed you.
+                  <span className="tabnum text-lamp-glow">{progress.cards}</span> needed you
+                  {failed > 0 && (
+                    <>
+                      , <span className="tabnum text-ember">{failed}</span> didn’t come back
+                    </>
+                  )}
+                  .
                 </>
               ) : (
                 <>
                   Working through the evening —{' '}
                   <span className="tabnum">{progress.done}</span> of{' '}
                   <span className="tabnum">{progress.total}</span>
+                  {progress.label && <span className="text-cream-faint"> · {progress.label}</span>}
                 </>
               )}
             </p>
@@ -127,6 +151,7 @@ export function DayRunner({
               <p className="tabnum text-[0.78rem] text-cream-faint">
                 <span className="text-sage">{progress.quiet} quiet</span> ·{' '}
                 <span className="text-lamp-glow">{progress.cards} need you</span>
+                {failed > 0 && <span className="text-ember"> · {failed} failed</span>}
               </p>
             )}
           </div>

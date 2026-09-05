@@ -19,7 +19,7 @@ import { matchesFilter, TRACE_FILTERS } from '../components/trace/traceStyles'
 import { RING_SIZE, useEvents } from '../hooks/useEvents'
 
 export function TraceDrawer({ open, onClose }: { open: boolean; onClose: () => void }) {
-  const { events, status, paused, setPaused, clear } = useEvents()
+  const { events, status, transport, paused, setPaused, clear } = useEvents()
   const [filterId, setFilterId] = useState<string>('all')
   const [pinned, setPinned] = useState(true)
   const scroller = useRef<HTMLDivElement>(null)
@@ -99,7 +99,7 @@ export function TraceDrawer({ open, onClose }: { open: boolean; onClose: () => v
                   }
                   pulse={status === 'open'}
                 />
-                {status === 'open' ? 'live' : status}
+                {status === 'open' ? (transport === 'poll' ? 'live · polling' : 'live') : status}
               </span>
               <span className="tabnum truncate text-[0.7rem] text-cream-faint">
                 {events.length}/{RING_SIZE}

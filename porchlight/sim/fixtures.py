@@ -10,6 +10,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, TypedDict
 
 from ..clock import Clock, SystemClock
+from ..config import Settings, get_settings
 from ..models import (
     AidRequest,
     AvailabilityWindow,
@@ -678,16 +679,29 @@ def reply_for(volunteer_id: str, index: int = 0) -> str:
 # --------------------------------------------------------------------------------------
 
 
-def group_settings() -> GroupSettings:
-    """The group's policy settings."""
+def group_settings(settings: Settings | None = None) -> GroupSettings:
+    """The group's policy settings, taken from the deployment's configuration.
+
+    Every knob here also exists on :class:`~porchlight.config.Settings`, and the policy engine
+    reads the ``Settings`` one — so the seeded row has to come from the same place or the porch
+    would advertise a rule nobody enforces. The hosted demo turns quiet hours off, and this is
+    what stops it from still claiming 21:00–08:00 on ``/api/porch``.
+
+    Args:
+        settings: The configuration to mirror. Defaults to the process-wide settings.
+
+    Returns:
+        The group row to seed.
+    """
+    settings = settings or get_settings()
     return GroupSettings(
-        name=GROUP_NAME,
-        timezone="America/Toronto",
-        quiet_hours=(21, 8),
-        petty_cash_limit=40.0,
-        max_candidates=3,
-        escalate_hours_before_window=6,
-        confidence_threshold=0.55,
+        name=settings.group_name,
+        timezone=settings.timezone,
+        quiet_hours=settings.quiet_hours,
+        petty_cash_limit=settings.petty_cash_limit,
+        max_candidates=settings.max_candidates,
+        escalate_hours_before_window=settings.escalate_hours_before_window,
+        confidence_threshold=settings.confidence_threshold,
         zones=list(ZONES),
     )
 
@@ -754,19 +768,20 @@ def _history(now: datetime) -> list[AidRequest]:
     ]
 
 
-def seed_store(store: Store, clock: Clock | None = None) -> dict[str, int]:
+def seed_store(store: Store, clock: Clock | None = None, settings: Settings | None = None) -> dict[str, int]:
     """Wipe ``store`` and load the Maple Street fixtures into it.
 
     Args:
         store: Any :class:`~porchlight.store.base.Store`.
         clock: Time source used to date the seeded history; defaults to the system clock.
+        settings: Configuration the seeded group row mirrors; defaults to the process settings.
 
     Returns:
         ``{"volunteers": n, "requesters": n, "requests": n}``.
     """
     now = (clock or SystemClock()).now()
     store.reset()
-    store.put_group_settings(group_settings())
+    store.put_group_settings(group_settings(settings))
 
     for volunteer in VOLUNTEERS:
         seeded = volunteer.model_copy(deep=True)

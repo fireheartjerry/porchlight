@@ -61,6 +61,19 @@ class IntakeResult(_Out):
         """False when this message needs no outreach: it asks for nothing, or repeats a job."""
         return self.is_request and not self.duplicate_of
 
+    def needs_coordinator(self) -> bool:
+        """True when this message must reach the coordinator whatever else intake decided.
+
+        Safety beats the not-a-request short-circuit. On the live stack a "the kid next door is
+        home alone and the stove is on" message came back with ``is_request=false`` *and* two
+        safety flags *and* ``needs_human=true``; the graph read only ``is_request`` and closed it
+        as cancelled. Any one of these four signals now routes the message to the decision-card
+        path instead, whatever ``is_request`` says.
+        """
+        return bool(
+            self.safety_flags or self.urgency is Urgency.EMERGENCY or self.money_involved or self.needs_human
+        )
+
     def apply_to(self, request: AidRequest) -> AidRequest:
         """Copy the understood fields onto an existing request, leaving ids and status alone."""
         request.summary = self.summary or request.summary
