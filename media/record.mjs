@@ -219,15 +219,17 @@ const SHOTS = [
       await page.goto(`${BASE}/#/inbox`, { waitUntil: 'domcontentloaded' })
       const run = page.getByRole('button', { name: /Run a Tuesday/i })
       await run.waitFor({ timeout: 20_000 })
+      await run.hover()
+      await page.waitForTimeout(300)
+      await run.click()
+      // The evening is driven from the browser now, one request at a time, and the
+      // mock model still needs a few seconds per request. Let most of it happen off
+      // camera and start the take on the last two, so the bar is seen finishing.
+      await page.getByText(/(10|11) of 12|Tuesday done/).first().waitFor({ timeout: 300_000 })
+      await parkMouse(page)
       return async () => {
-        // 0 → 0.28: twelve requests, start to finish. The bar is over in a blink,
-        // which is exactly what the narration says.
-        await pace.until(0.06)
-        await run.hover()
-        await page.waitForTimeout(400)
-        await run.click()
-        await page.getByText(/Tuesday done/).waitFor({ timeout: 90_000 })
-        await parkMouse(page)
+        // 0 → 0.3: the last requests land and the bar reads "Tuesday done".
+        await page.getByText(/Tuesday done|Tuesday stopped/).first().waitFor({ timeout: 120_000 })
         await pace.until(0.3)
 
         // 0.3 → 0.62: the porch afterwards — what it handled, what it surfaced.

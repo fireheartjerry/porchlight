@@ -30,8 +30,8 @@ const SNIPPETS = [
     file: 'porchlight/policy.py',
     caption: 'The autonomy boundary: one intervention, four answers.',
     ranges: [
-      { from: 786, to: 793, expect: 'def before_tool_call' },
-      { from: 795, to: 802, expect: 'A volunteer reporting something wrong' },
+      { from: 859, to: 866, expect: 'def before_tool_call' },
+      { from: 868, to: 875, expect: 'A volunteer reporting something wrong' },
     ],
   },
   {
@@ -39,9 +39,9 @@ const SNIPPETS = [
     file: 'porchlight/graph.py',
     caption: 'The orchestration: a Strands Graph with conditional edges.',
     ranges: [
-      { from: 490, to: 501, expect: 'builder = GraphBuilder()' },
-      { from: 506, to: 507, expect: 'reset_on_revisit' },
-      { from: 511, to: 511, expect: 'return builder.build()' },
+      { from: 579, to: 590, expect: 'builder = GraphBuilder()' },
+      { from: 594, to: 595, expect: 'set_max_node_executions' },
+      { from: 600, to: 600, expect: 'return builder.build()' },
     ],
   },
   {
@@ -49,10 +49,10 @@ const SNIPPETS = [
     file: 'porchlight/runtime.py',
     caption: 'The deployment: one AgentCore entrypoint.',
     ranges: [
-      { from: 31, to: 31, expect: 'BedrockAgentCoreApp' },
-      { from: 48, to: 48, expect: 'app = BedrockAgentCoreApp()' },
-      { from: 190, to: 191, expect: '@app.entrypoint' },
-      { from: 199, to: 204, expect: 'payload = payload or {}' },
+      { from: 32, to: 32, expect: 'BedrockAgentCoreApp' },
+      { from: 49, to: 49, expect: 'app = BedrockAgentCoreApp()' },
+      { from: 219, to: 220, expect: '@app.entrypoint' },
+      { from: 228, to: 233, expect: 'payload = payload or {}' },
     ],
   },
 ]
